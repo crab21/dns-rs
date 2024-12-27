@@ -1,3 +1,4 @@
+use core::error;
 use futures::future::{join, join_all};
 use reqwest::{Client, ClientBuilder};
 use serde::Deserialize;
@@ -147,9 +148,24 @@ async fn forward_to_fastest_doh(
                         .await
                         .unwrap_or_else(|_| ()); // 发送到通道
                 }
+
+                Ok(Ok(resp)) if resp.status().is_success() == false => {
+                  println!("[NOT-SUCCESS] Failed to send request to {}", urlClone);
+                }
+
+                Ok(Err(e)) => {
+                    // 处理 reqwest 错误
+                    eprintln!("Failed to send request: {}", e);
+                }
+                Err(e) => {
+                    // 处理超时错误
+                    eprintln!("Request timed out: {}", e);
+                }
                 _ => {
                     println!("Failed to send request to {}", urlClone);
-                    tx.send(None).await.unwrap_or_else(|err| (println!("{:?}", err)));
+                    tx.send(None)
+                        .await
+                        .unwrap_or_else(|err| (println!("{:?}", err)));
                     // 发送到通道
                 }
             }
