@@ -1,5 +1,5 @@
 use futures::future::join_all;
-use reqwest::Client;
+use reqwest::{Client,ClientBuilder};
 use serde::Deserialize;
 use std::error::Error;
 use std::io::Read;
@@ -30,6 +30,16 @@ struct Config {
 }
 
 
+async fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
+    let client = ClientBuilder::new()
+        .http2_prior_knowledge() // 启用 HTTP/2 优化
+        .pool_idle_timeout(Some(Duration::from_secs(90))) // 设置连接池空闲超时时间
+        .timeout(Duration::from_secs(10)) // 设置请求超时时间
+        .build()?;
+    Ok(client)
+}
+
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::env::set_var("RING_NO_ASM", "1");
@@ -47,6 +57,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = format!("{}{}","0.0.0.0:",config.port);
     let socket = UdpSocket::bind(address.clone()).await?;
     println!("Listening on ...{:?}", address);
+    let client = create_client().await?;
+
 
     let mut buf = [0u8; 512];
     loop {
@@ -60,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
         println!("Received DNS query from {}", src);
         // Forward to DoH servers and get the fastest response
-        match forward_to_fastest_doh(&buf[..len], config.dohs.clone()).await {
+        match forward_to_fastest_doh(&client,&buf[..len], config.dohs.clone()).await {
             Ok(response) => {
                 // Forward DoH response back to the client
                 if let Err(e) = socket.send_to(&response, src).await {
@@ -73,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Forward DNS query to the fastest DoH server from a list of servers
-async fn forward_to_fastest_doh(query: &[u8],doh_urls: Vec<String>) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+async fn forward_to_fastest_doh(client: &Client,query: &[u8],doh_urls: Vec<String>) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
     let client = Client::new();
     let mut futures = Vec::new();
