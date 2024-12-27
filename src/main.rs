@@ -149,7 +149,8 @@ async fn forward_to_fastest_doh(
                 }
                 _ => {
                     println!("Failed to send request to {}", urlClone);
-                    tx.send(None).await.unwrap(); // 发送 None 表示失败
+                    tx.send(None).await.unwrap_or_else(|err| (println!("{:?}", err)));
+                    // 发送到通道
                 }
             }
         });
