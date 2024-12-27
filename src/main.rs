@@ -1,9 +1,10 @@
-use futures::future::join_all;
-use reqwest::{Client,ClientBuilder};
+use futures::future::{join, join_all};
+use reqwest::{Client, ClientBuilder};
 use serde::Deserialize;
 use std::error::Error;
 use std::io::Read;
 use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration, Instant};
 use trust_dns_proto::op::Message;
 use trust_dns_proto::serialize::binary::{BinDecodable, BinEncodable};
@@ -24,11 +25,10 @@ use std::{fs, string};
 
 #[derive(Debug, Deserialize)]
 struct Config {
-  dohs: Vec<String>,
-  port: u16,
-  timeout: u64,
+    dohs: Vec<String>,
+    port: u16,
+    timeout: u64,
 }
-
 
 async fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
     let client = ClientBuilder::new()
@@ -39,6 +39,26 @@ async fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
     Ok(client)
 }
 
+fn parse_domain_name(query: &[u8]) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let message = Message::from_bytes(query)?;
+    let questions = message.queries();
+    let domain_names = questions.iter().map(|q| q.name().to_string()).collect();
+    Ok(domain_names)
+}
+
+fn parse_ip_addresses(response: &[u8]) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let message = Message::from_bytes(response)?;
+    let answers = message.answers();
+    let ips = answers
+        .iter()
+        .filter_map(|record| match record.rdata() {
+            trust_dns_proto::rr::RData::A(ip) => Some(ip.to_string()),
+            trust_dns_proto::rr::RData::AAAA(ip) => Some(ip.to_string()),
+            _ => None,
+        })
+        .collect();
+    Ok(ips)
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -54,11 +74,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Config: {:?}", config);
 
     // Listen on UDP port 53
-    let address = format!("{}{}","0.0.0.0:",config.port);
+    let address = format!("{}{}", "0.0.0.0:", config.port);
     let socket = UdpSocket::bind(address.clone()).await?;
     println!("Listening on ...{:?}", address);
     let client = create_client().await?;
-
 
     let mut buf = [0u8; 512];
     loop {
@@ -70,9 +89,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
+
+        // 解析并打印 DNS 请求的域名
+        if let Ok(domain_names) = parse_domain_name(&buf[..len]) {
+            println!("Received query for domains: {:?}", domain_names);
+        } else {
+            eprintln!("Failed to parse DNS query");
+        }
+
         println!("Received DNS query from {}", src);
         // Forward to DoH servers and get the fastest response
-        match forward_to_fastest_doh(&client,&buf[..len], config.dohs.clone()).await {
+        match forward_to_fastest_doh(&client, &buf[..len], config.dohs.clone()).await {
             Ok(response) => {
                 // Forward DoH response back to the client
                 if let Err(e) = socket.send_to(&response, src).await {
@@ -85,16 +112,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Forward DNS query to the fastest DoH server from a list of servers
-async fn forward_to_fastest_doh(client: &Client,query: &[u8],doh_urls: Vec<String>) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
-
+async fn forward_to_fastest_doh(
+    client: &Client,
+    query: &[u8],
+    doh_urls: Vec<String>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let client = Client::new();
-    let mut futures = Vec::new();
+    let (tx, mut rx) = mpsc::channel::<Option<(Duration, Vec<u8>, String)>>(1); // 通道的缓冲区为 1
 
     // Spawn asynchronous tasks for each DoH server
     for url in doh_urls {
         let client = client.clone();
         let query = query.to_vec();
-        let future = async move {
+        let tx = tx.clone(); // 克隆发送者，确保每个任务都有一个发送通道
+        let urlClone = url.clone(); // 克隆 URL，确保每个任务都有一个 URL 副本
+
+        tokio::spawn(async move {
             let start_time = Instant::now();
             let response = timeout(
                 Duration::from_secs(5),
@@ -110,31 +143,33 @@ async fn forward_to_fastest_doh(client: &Client,query: &[u8],doh_urls: Vec<Strin
                 Ok(Ok(resp)) if resp.status().is_success() => {
                     let elapsed = start_time.elapsed();
                     let response_bytes = resp.bytes().await.unwrap_or_default();
-                    Some((elapsed, response_bytes.to_vec()))
+                    tx.send(Some((elapsed, response_bytes.to_vec(), urlClone)))
+                        .await
+                        .unwrap_or_else(|_| ()); // 发送到通道
                 }
-                _ => None,
+                _ => {
+                    println!("Failed to send request to {}", urlClone);
+                    tx.send(None).await.unwrap(); // 发送 None 表示失败
+                }
             }
-        };
-        futures.push(future);
+        });
     }
 
-    // Execute all requests concurrently
-    let results = join_all(futures).await;
-
-    // Filter and find the fastest response
-    let mut fastest_response: Option<(Duration, Vec<u8>)> = None;
-    for result in results {
-        if let Some((elapsed, response)) = result {
-            println!("DoH response received in {:?}", elapsed);
-            if fastest_response.is_none() || elapsed < fastest_response.as_ref().unwrap().0 {
-                fastest_response = Some((elapsed, response));
-            }
-            break;
+    // 等待第一个完成的结果
+    if let Some((elapsed, response, url)) = rx.recv().await.flatten() {
+        println!("Received response from {} in {:?}", url, elapsed);
+        // 解析并打印 DNS 响应中的 IP 地址
+        if let Ok(ips) = parse_ip_addresses(&response) {
+            println!("Response contains IPs: {:?}, from DOH: [{}]", ips, url);
+        } else {
+            eprintln!("Failed to parse DNS response");
         }
+        rx.close();
+
+        // 返回第一个成功的响应
+        return Ok(response.to_vec());
     }
 
-    // Return the fastest response or an error if none succeeded
-    fastest_response
-        .map(|(_, response)| response)
-        .ok_or_else(|| "No successful DoH response received".into())
+    // 如果没有收到任何成功响应，返回错误
+    Err("No successful DoH response received".into())
 }

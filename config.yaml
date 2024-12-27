@@ -1,9 +1,9 @@
 dohs:
+  - "https://223.6.6.6/dns-query"
   - "https://223.5.5.5/dns-query"
   - "https://208.67.222.222/dns-query"
   - "https://208.67.220.220/dns-query"
   - "https://120.53.53.53/dns-query"
-  - "https://223.6.6.6/dns-query"
   - "https://doh.360.cn/dns-query"
-port: 53
+port: 153
 timeout: 5
