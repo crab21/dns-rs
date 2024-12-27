@@ -25,6 +25,8 @@ use std::{fs, string};
 #[derive(Debug, Deserialize)]
 struct Config {
   dohs: Vec<String>,
+  port: u16,
+  timeout: u64,
 }
 
 
@@ -42,8 +44,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Config: {:?}", config);
 
     // Listen on UDP port 53
-    let socket = UdpSocket::bind("0.0.0.0:153").await?;
-    println!("Listening on 0.0.0.0:153...");
+    let address = format!("{}{}","0.0.0.0:",config.port);
+    let socket = UdpSocket::bind(address.clone()).await?;
+    println!("Listening on ...{:?}", address);
 
     let mut buf = [0u8; 512];
     loop {
