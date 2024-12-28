@@ -19,7 +19,7 @@ use std::{fs, string};
 
 use once_cell::sync::Lazy;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Config {
     dohs: Vec<String>,
     port: u16,
@@ -94,7 +94,7 @@ fn parse_ip_ttl(response: &[u8]) -> Result<DOHResponse, Box<dyn std::error::Erro
     Ok(resp)
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 16)]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let globalDashMap = create_dashmap().await?;
 
@@ -126,7 +126,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     loop {
-        let mut domainName = String::from("");
         // Receive data
         let (len, src) = match socket.recv_from(&mut buf).await {
             Ok((len, src)) => (len, src),
@@ -136,105 +135,129 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        // 解析并打印 DNS 请求的域名
-
-        if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
-            let domain_names = dohRequest.domain_names;
-            println!("Received query for domains: {:?}", domain_names);
-            let cloneDomain = domain_names[0].clone();
-            let value = globalDashMap
-                .get(&cloneDomain)
-                .map(|v| {
-                    println!("v.exipre_time: {:?}", v.exipre_time);
-                    if v.exipre_time
-                        > SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .expect("Time went backwards")
-                            .as_secs()
-                    {
-                        println!(
-                            "Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []",
-                            cloneDomain,
-                            parse_ip_addresses(&v.resp).unwrap()
-                        );
-                        v.resp.clone()
-                    } else {
-                        println!("Cache expired for domain: {:?}", cloneDomain);
-                        vec![]
-                    }
-                })
-                .unwrap_or_else(|| vec![]);
-            domainName = domain_names[0].clone(); // 正确更新 domainName
-            if value.len() > 0 {
-                println!();
-                let mut message = Message::from_bytes(&value)?;
-                message.set_id(dohRequest.id);
-                // 解析并打印 DNS 响应中的 IP 地址
-                if let Ok(ips) = parse_ip_addresses(&value) {
-                    if ips.len() > 0 {
-                        println!(
-                            "Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []",
-                            cloneDomain, ips
-                        );
-                        let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
-                        match sendRespose {
-                            Ok(_) => {
-                                continue;
-                            }
-                            Err(e) => {
-                                eprintln!("Failed to send response: {}", e);
-                            }
-                        }
-                    } else {
-                        globalDashMap.remove(&cloneDomain);
-                        eprintln!("dns len is zero,,,,Failed to parse DNS response, re-resolve dns domain {:?}", cloneDomain);
-                    }
-                } else {
-                    globalDashMap.remove(&cloneDomain);
-                    eprintln!(
-                        "Failed to parse DNS response,re-resolve dns domain {:?}",
-                        cloneDomain
-                    );
-                }
-            } else {
-                globalDashMap.remove(&cloneDomain);
-            }
-        } else {
-            eprintln!("Failed to parse DNS query to get domain name");
-        }
-
-        println!("Received DNS query from {}", src);
-        // Forward to DoH servers and get the fastest response
-        match forward_to_fastest_doh(
-            &client,
-            domainName.clone(),
-            buf[..len].to_vec(),
-            config.dohs.clone(),
-        )
-        .await
-        {
-            Ok(response) => {
-                // Forward DoH response back to the client
-                if let Err(e) = socket.send_to(&response, src).await {
-                    eprintln!("Failed to send response: {}", e);
-                    continue;
-                }
-                // 缓存响应
-                println!("Caching response for domain: {:?}", domainName.clone());
-                match parse_ip_ttl(response.clone().as_slice()) {
-                    Ok(resp) => {
-                        globalDashMap.insert(domainName, resp);
-                    }
-                    Err(e) => {
-                        eprintln!("Failed to parse TTL: {}", e);
-                    }
-                }
-            }
-            Err(e) => eprintln!("DoH request failed: {}", e),
-        }
+        recv_and_do_resolve(
+            Arc::clone(&globalDashMap),
+            &socket,
+            client.clone(),
+            config.clone(),
+            buf,
+            len,
+            src.clone(),
+        ).await?;
     }
 }
 
+async fn recv_and_do_resolve(
+    globalDashMap: Arc<DashMap<String, DOHResponse>>,
+    socket: &UdpSocket,
+    client: Client,
+    config: Config,
+    buf: [u8; 512],
+    len: usize,
+    src: std::net::SocketAddr,
+) -> Result<(), Box<dyn std::error::Error>>  {
+    // 解析并打印 DNS 请求的域名
+    let mut domainName = String::from("");
+    if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
+        let domain_names = dohRequest.domain_names;
+        println!("Received query for domains: {:?}", domain_names);
+        let cloneDomain = domain_names[0].clone();
+        let value = globalDashMap
+            .get(&cloneDomain)
+            .map(|v| {
+                println!("v.exipre_time: {:?}", v.exipre_time);
+                if v.exipre_time
+                    > SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .expect("Time went backwards")
+                        .as_secs()
+                {
+                    println!(
+                        "Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []",
+                        cloneDomain,
+                        parse_ip_addresses(&v.resp).unwrap()
+                    );
+                    v.resp.clone()
+                } else {
+                    println!("Cache expired for domain: {:?}", cloneDomain);
+                    vec![]
+                }
+            })
+            .unwrap_or_else(|| vec![]);
+        domainName = domain_names[0].clone(); // 正确更新 domainName
+        if value.len() > 0 {
+            println!();
+            let mut message = Message::from_bytes(&value)?;
+            message.set_id(dohRequest.id);
+            // 解析并打印 DNS 响应中的 IP 地址
+            if let Ok(ips) = parse_ip_addresses(&value) {
+                if ips.len() > 0 {
+                    println!(
+                        "Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []",
+                        cloneDomain, ips
+                    );
+                    let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
+                    match sendRespose {
+                        Ok(_) => {
+                            return Ok(());
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to send response: {}", e);
+                        }
+                    }
+                } else {
+                    globalDashMap.remove(&cloneDomain);
+                    eprintln!("dns len is zero,,,,Failed to parse DNS response, re-resolve dns domain {:?}", cloneDomain);
+                }
+            } else {
+                globalDashMap.remove(&cloneDomain);
+                eprintln!(
+                    "Failed to parse DNS response,re-resolve dns domain {:?}",
+                    cloneDomain
+                );
+            }
+        } else {
+            globalDashMap.remove(&cloneDomain);
+        }
+    } else {
+        eprintln!("Failed to parse DNS query to get domain name");
+    }
+
+    println!("Received DNS query from {}", src);
+    // Forward to DoH servers and get the fastest response
+    match forward_to_fastest_doh(
+        &client,
+        domainName.clone(),
+        buf[..len].to_vec(),
+        config.dohs.clone(),
+    )
+    .await
+    {
+        Ok(response) => {
+            // Forward DoH response back to the client
+            if let Err(e) = socket.send_to(&response, src).await {
+                eprintln!("Failed to send response: {}", e);
+                return Err(e.into());
+            }
+            // 缓存响应
+            println!("Caching response for domain: {:?}", domainName.clone());
+            match parse_ip_ttl(response.clone().as_slice()) {
+                Ok(resp) => {
+                    globalDashMap.insert(domainName, resp);
+                    Ok(())
+                }
+                Err(e) => {
+                    eprintln!("Failed to parse TTL: {}", e);
+                    return Err(e.into());
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("DoH request failed: {}", e);
+            Err(e.into())
+        },
+    }
+}
 /// Forward DNS query to the fastest DoH server from a list of servers
 async fn forward_to_fastest_doh(
     client: &Client,
