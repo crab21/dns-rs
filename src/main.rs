@@ -150,16 +150,25 @@ async fn forward_to_fastest_doh(
                 }
 
                 Ok(Ok(resp)) if resp.status().is_success() == false => {
-                  println!("[NOT-SUCCESS] Failed to send request to {}", urlClone);
+                    println!("[NOT-SUCCESS] Failed to send request to {}", urlClone);
+                    tx.send(None)
+                        .await
+                        .unwrap_or_else(|err| (println!("{:?}", err)));
                 }
 
                 Ok(Err(e)) => {
                     // 处理 reqwest 错误
                     eprintln!("Failed to send request: {}", e);
+                    tx.send(None)
+                        .await
+                        .unwrap_or_else(|err| (println!("{:?}", err)));
                 }
                 Err(e) => {
                     // 处理超时错误
                     eprintln!("Request timed out: {}", e);
+                    tx.send(None)
+                        .await
+                        .unwrap_or_else(|err| (println!("{:?}", err)));
                 }
                 _ => {
                     println!("Failed to send request to {}", urlClone);
