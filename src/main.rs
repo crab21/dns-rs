@@ -17,6 +17,7 @@ use trust_dns_proto::serialize::binary::{BinDecodable, BinEncodable};
 use serde_yaml;
 use std::{fs, string};
 
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use once_cell::sync::Lazy;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -28,7 +29,8 @@ struct Config {
 }
 use std::sync::Arc;
 
-async fn create_dashmap() -> Result<Arc<DashMap<String, DOHResponse>>, Box<dyn std::error::Error + Send + Sync>> {
+async fn create_dashmap(
+) -> Result<Arc<DashMap<String, DOHResponse>>, Box<dyn std::error::Error + Send + Sync>> {
     let dashmap = Arc::new(DashMap::new());
     Ok(dashmap)
 }
@@ -63,7 +65,9 @@ fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Err
     })
 }
 
-fn parse_ip_addresses(response: &[u8]) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
+fn parse_ip_addresses(
+    response: &[u8],
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     let message = Message::from_bytes(response)?;
     let answers = message.answers();
     let ips = answers
@@ -149,7 +153,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 buf_clone,
                 len,
                 src_clone,
-            ).await {
+            )
+            .await
+            {
                 eprintln!("Error in recv_and_do_resolve: {:?}", e);
             }
         });
@@ -174,7 +180,15 @@ async fn recv_and_do_resolve(
         let value = globalDashMap
             .get(&cloneDomain)
             .map(|v| {
-                println!("v.exipre_time: {:?}", v.exipre_time);
+                // 转换为 UTC 时间
+                let datetime = Utc.timestamp_opt(v.exipre_time as i64, 0).unwrap();
+
+                // 格式化为字符串
+                let formatted = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
+                println!(
+                    "v.expire_time: {:?}, format time: {:?}",
+                    v.exipre_time, formatted
+                );
                 if v.exipre_time
                     > SystemTime::now()
                         .duration_since(UNIX_EPOCH)
