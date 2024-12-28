@@ -128,12 +128,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Cache hit for domain: {:?}", domain_names[0]);
                 let mut message = Message::from_bytes(&value)?;
                 message.set_id(dohRequest.id);
-                if let Err(e) = socket.send_to(&message.to_vec().unwrap(), src).await {
-                    eprintln!("Failed to send response: {}", e);
-                }
                 // 解析并打印 DNS 响应中的 IP 地址
                 if let Ok(ips) = parse_ip_addresses(&value) {
-                    println!("Response contains IPs: {:?}, from DOH: []", ips);
+                    if ips.len() > 0 {
+                        println!("Response contains IPs: {:?}, from DOH: []", ips);
+                        if let Err(e) = socket.send_to(&message.to_vec().unwrap(), src).await {
+                          eprintln!("Failed to send response: {}", e);
+                      }
+                    } else {
+                        eprintln!("Failed to parse DNS response");
+                    }
                 } else {
                     eprintln!("Failed to parse DNS response");
                 }
