@@ -207,6 +207,7 @@ async fn recv_and_do_resolve(
                 }
             })
             .unwrap_or_else(|| vec![]);
+        println!("globalDashMap len is: {:?}", globalDashMap.len());
         domainName = domain_names[0].clone(); // 正确更新 domainName
         if value.len() > 0 {
             println!();
