@@ -1,5 +1,5 @@
 use core::error;
-use dashmap::DashMap;
+use dashmap::{DashMap, Map};
 use futures::future::{join, join_all};
 use reqwest::{Client, ClientBuilder};
 use serde::Deserialize;
@@ -9,8 +9,9 @@ use std::io::Read;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{interval, timeout, Duration, Instant};
-use trust_dns_proto::op::Message;
+use trust_dns_proto::op::{Message, Query};
 use trust_dns_proto::rr::domain;
+use trust_dns_proto::rr::{Name, RecordType};
 use trust_dns_proto::serialize::binary::{BinDecodable, BinEncodable};
 
 use serde_yaml;
@@ -27,7 +28,7 @@ struct Config {
 }
 use std::sync::Arc;
 
-async fn create_dashmap() -> Result<Arc<DashMap<String, Vec<u8>>>, Box<dyn std::error::Error>> {
+async fn create_dashmap() -> Result<Arc<DashMap<String, DOHResponse>>, Box<dyn std::error::Error>> {
     let dashmap = Arc::new(DashMap::new());
     Ok(dashmap)
 }
@@ -35,6 +36,7 @@ async fn create_dashmap() -> Result<Arc<DashMap<String, Vec<u8>>>, Box<dyn std::
 async fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
     let client = ClientBuilder::new()
         .http2_prior_knowledge() // 启用 HTTP/2 优化
+        .pool_max_idle_per_host(900) // 设置每个主机的最大空闲连接数
         .pool_idle_timeout(Some(Duration::from_secs(90))) // 设置连接池空闲超时时间
         .timeout(Duration::from_secs(10)) // 设置请求超时时间
         .build()?;
@@ -44,6 +46,11 @@ async fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
 struct DOHRequest {
     domain_names: Vec<String>,
     id: u16,
+}
+
+struct DOHResponse {
+    pub resp: Vec<u8>,
+    pub exipre_time: u64,
 }
 
 fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Error>> {
@@ -68,6 +75,23 @@ fn parse_ip_addresses(response: &[u8]) -> Result<Vec<String>, Box<dyn std::error
         })
         .collect();
     Ok(ips)
+}
+
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn parse_ip_ttl(response: &[u8]) -> Result<DOHResponse, Box<dyn std::error::Error>> {
+    let message = Message::from_bytes(response)?;
+    let answers = message.answers();
+    let ttl = answers.iter().map(|record| record.ttl()).min().unwrap_or(0);
+    let resp = DOHResponse {
+        resp: response.to_vec(),
+        exipre_time: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Time went backwards")
+            .as_secs()
+            + ttl as u64,
+    };
+    Ok(resp)
 }
 
 #[tokio::main]
@@ -120,7 +144,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let cloneDomain = domain_names[0].clone();
             let value = globalDashMap
                 .get(&cloneDomain)
-                .map(|v| v.clone())
+                .map(|v| {
+                    println!("v.exipre_time: {:?}", v.exipre_time);
+                    if v.exipre_time
+                        > SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .expect("Time went backwards")
+                            .as_secs()
+                    {
+                        println!(
+                            "Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []",
+                            cloneDomain,
+                            parse_ip_addresses(&v.resp).unwrap()
+                        );
+                        v.resp.clone()
+                    } else {
+                        println!("Cache expired for domain: {:?}", cloneDomain);
+                        vec![]
+                    }
+                })
                 .unwrap_or_else(|| vec![]);
             domainName = domain_names[0].clone(); // 正确更新 domainName
             if value.len() > 0 {
@@ -130,11 +172,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 解析并打印 DNS 响应中的 IP 地址
                 if let Ok(ips) = parse_ip_addresses(&value) {
                     if ips.len() > 0 {
-                        println!("Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []", cloneDomain, ips);
-                        let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await ;
+                        println!(
+                            "Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []",
+                            cloneDomain, ips
+                        );
+                        let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
                         match sendRespose {
                             Ok(_) => {
-                              continue;
+                                continue;
                             }
                             Err(e) => {
                                 eprintln!("Failed to send response: {}", e);
@@ -151,6 +196,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         cloneDomain
                     );
                 }
+            } else {
+                globalDashMap.remove(&cloneDomain);
             }
         } else {
             eprintln!("Failed to parse DNS query to get domain name");
@@ -158,7 +205,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("Received DNS query from {}", src);
         // Forward to DoH servers and get the fastest response
-        match forward_to_fastest_doh(&client, &buf[..len], config.dohs.clone()).await {
+        match forward_to_fastest_doh(
+            &client,
+            domainName.clone(),
+            buf[..len].to_vec(),
+            config.dohs.clone(),
+        )
+        .await
+        {
             Ok(response) => {
                 // Forward DoH response back to the client
                 if let Err(e) = socket.send_to(&response, src).await {
@@ -166,8 +220,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 // 缓存响应
-                println!("Caching response for domain: {:?}", domainName);
-                globalDashMap.insert(domainName, response.clone());
+                println!("Caching response for domain: {:?}", domainName.clone());
+                match parse_ip_ttl(response.clone().as_slice()) {
+                    Ok(resp) => {
+                        globalDashMap.insert(domainName, resp);
+                    }
+                    Err(e) => {
+                        eprintln!("Failed to parse TTL: {}", e);
+                    }
+                }
             }
             Err(e) => eprintln!("DoH request failed: {}", e),
         }
@@ -177,16 +238,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Forward DNS query to the fastest DoH server from a list of servers
 async fn forward_to_fastest_doh(
     client: &Client,
-    query: &[u8],
+    domainName: String,
+    requestBody: Vec<u8>,
     doh_urls: Vec<String>,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let client = Client::new();
     let (tx, mut rx) = mpsc::channel::<Option<(Duration, Vec<u8>, String)>>(1); // 通道的缓冲区为 1
-
-    // Spawn asynchronous tasks for each DoH server
+                                                                                // Spawn asynchronous tasks for each DoH server
     for url in doh_urls {
         let client = client.clone();
-        let query = query.to_vec();
+        let query = requestBody.to_vec();
         let tx = tx.clone(); // 克隆发送者，确保每个任务都有一个发送通道
         let urlClone = url.clone(); // 克隆 URL，确保每个任务都有一个 URL 副本
 
@@ -213,6 +274,10 @@ async fn forward_to_fastest_doh(
 
                 Ok(Ok(resp)) if resp.status().is_success() == false => {
                     println!("[NOT-SUCCESS] Failed to send request to {}", urlClone);
+                    eprintln!(
+                        "Failed to send request to {}",
+                        resp.text().await.unwrap_or_default()
+                    );
                     tx.send(None)
                         .await
                         .unwrap_or_else(|err| (println!("{:?}", err)));
