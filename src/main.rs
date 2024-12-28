@@ -133,18 +133,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if ips.len() > 0 {
                         println!("Response contains IPs: {:?}, from DOH: []", ips);
                         if let Err(e) = socket.send_to(&message.to_vec().unwrap(), src).await {
-                          eprintln!("Failed to send response: {}", e);
-                      }
+                            eprintln!("Failed to send response: {}", e);
+                            continue;
+                        }
                     } else {
-                        eprintln!("Failed to parse DNS response");
+                        eprintln!("dns len is zero,,,,Failed to parse DNS response, re-resolve dns domain {:?}", domain_names[0]);
                     }
                 } else {
-                    eprintln!("Failed to parse DNS response");
+                    eprintln!(
+                        "Failed to parse DNS response,re-resolve dns domain {:?}",
+                        domain_names[0]
+                    );
                 }
-                continue;
             }
         } else {
-            eprintln!("Failed to parse DNS query");
+            eprintln!("Failed to parse DNS query to get domain name");
         }
 
         println!("Received DNS query from {}", src);
