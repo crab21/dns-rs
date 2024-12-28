@@ -91,12 +91,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut buf = [0u8; 512];
 
-    let globalDashMap_clone = globalDashMap.clone();
+    let global_dash_map_clone = Arc::clone(&globalDashMap);
     tokio::spawn(async move {
         let mut interval = interval(Duration::from_secs(config.clear_cache_interval));
         loop {
             interval.tick().await;
-            globalDashMap_clone.clear(); // 清空 map
+            global_dash_map_clone.clear(); // 清空 map
             println!("Map cleared!");
         }
     });
@@ -118,7 +118,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let domain_names = dohRequest.domain_names;
             println!("Received query for domains: {:?}", domain_names);
             let cloneDomain = domain_names[0].clone();
-            let globalDashMap = globalDashMap.clone();
             let value = globalDashMap
                 .get(&cloneDomain)
                 .map(|v| v.clone())
