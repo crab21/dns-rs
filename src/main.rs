@@ -28,12 +28,12 @@ struct Config {
 }
 use std::sync::Arc;
 
-async fn create_dashmap() -> Result<Arc<DashMap<String, DOHResponse>>, Box<dyn std::error::Error>> {
+async fn create_dashmap() -> Result<Arc<DashMap<String, DOHResponse>>, Box<dyn std::error::Error + Send + Sync>> {
     let dashmap = Arc::new(DashMap::new());
     Ok(dashmap)
 }
 
-async fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
+async fn create_client() -> Result<Client, Box<dyn std::error::Error + Send + Sync>> {
     let client = ClientBuilder::new()
         .http2_prior_knowledge() // 启用 HTTP/2 优化
         .pool_max_idle_per_host(900) // 设置每个主机的最大空闲连接数
@@ -53,7 +53,7 @@ struct DOHResponse {
     pub exipre_time: u64,
 }
 
-fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Error>> {
+fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Error + Send + Sync>> {
     let message = Message::from_bytes(query)?;
     let questions = message.queries();
     let domain_names = questions.iter().map(|q| q.name().to_string()).collect();
@@ -63,7 +63,7 @@ fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Err
     })
 }
 
-fn parse_ip_addresses(response: &[u8]) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+fn parse_ip_addresses(response: &[u8]) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     let message = Message::from_bytes(response)?;
     let answers = message.answers();
     let ips = answers
@@ -79,7 +79,7 @@ fn parse_ip_addresses(response: &[u8]) -> Result<Vec<String>, Box<dyn std::error
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn parse_ip_ttl(response: &[u8]) -> Result<DOHResponse, Box<dyn std::error::Error>> {
+fn parse_ip_ttl(response: &[u8]) -> Result<DOHResponse, Box<dyn std::error::Error + Send + Sync>> {
     let message = Message::from_bytes(response)?;
     let answers = message.answers();
     let ttl = answers.iter().map(|record| record.ttl()).min().unwrap_or(0);
@@ -95,7 +95,7 @@ fn parse_ip_ttl(response: &[u8]) -> Result<DOHResponse, Box<dyn std::error::Erro
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let globalDashMap = create_dashmap().await?;
 
     // 读取 YAML 文件
@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Listen on UDP port 53
     let address = format!("{}{}", "0.0.0.0:", config.port);
-    let socket = UdpSocket::bind(address.clone()).await?;
+    let socket = Arc::new(UdpSocket::bind(address.clone()).await?);
     println!("Listening on ...{:?}", address);
     let client = create_client().await?;
 
@@ -134,28 +134,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
         };
-
-        recv_and_do_resolve(
-            Arc::clone(&globalDashMap),
-            &socket,
-            client.clone(),
-            config.clone(),
-            buf,
-            len,
-            src.clone(),
-        ).await?;
+        let global_dash_map_clone = Arc::clone(&globalDashMap);
+        let client_clone = client.clone();
+        let config_clone = config.clone();
+        let buf_clone = buf.clone();
+        let src_clone = src.clone();
+        let socket_clone = Arc::clone(&socket);
+        let _ = tokio::spawn(async move {
+            if let Err(e) = recv_and_do_resolve(
+                global_dash_map_clone,
+                socket_clone,
+                client_clone,
+                config_clone,
+                buf_clone,
+                len,
+                src_clone,
+            ).await {
+                eprintln!("Error in recv_and_do_resolve: {:?}", e);
+            }
+        });
     }
 }
 
 async fn recv_and_do_resolve(
     globalDashMap: Arc<DashMap<String, DOHResponse>>,
-    socket: &UdpSocket,
+    socket: Arc<UdpSocket>,
     client: Client,
     config: Config,
     buf: [u8; 512],
     len: usize,
     src: std::net::SocketAddr,
-) -> Result<(), Box<dyn std::error::Error>>  {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 解析并打印 DNS 请求的域名
     let mut domainName = String::from("");
     if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
@@ -255,7 +264,7 @@ async fn recv_and_do_resolve(
         Err(e) => {
             eprintln!("DoH request failed: {}", e);
             Err(e.into())
-        },
+        }
     }
 }
 /// Forward DNS query to the fastest DoH server from a list of servers
@@ -264,7 +273,7 @@ async fn forward_to_fastest_doh(
     domainName: String,
     requestBody: Vec<u8>,
     doh_urls: Vec<String>,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let client = Client::new();
     let (tx, mut rx) = mpsc::channel::<Option<(Duration, Vec<u8>, String)>>(1); // 通道的缓冲区为 1
                                                                                 // Spawn asynchronous tasks for each DoH server
