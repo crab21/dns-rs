@@ -124,16 +124,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|| vec![]);
             domainName = domain_names[0].clone(); // 正确更新 domainName
             if value.len() > 0 {
-                println!("Cache hit for domain: {:?}", cloneDomain);
+                println!();
                 let mut message = Message::from_bytes(&value)?;
                 message.set_id(dohRequest.id);
                 // 解析并打印 DNS 响应中的 IP 地址
                 if let Ok(ips) = parse_ip_addresses(&value) {
                     if ips.len() > 0 {
-                        println!("Response contains IPs: {:?}, from DOH: []", ips);
-                        if let Err(e) = socket.send_to(&message.to_vec().unwrap(), src).await {
-                            eprintln!("Failed to send response: {}", e);
-                            continue;
+                        println!("Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []", cloneDomain, ips);
+                        let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await ;
+                        match sendRespose {
+                            Ok(_) => {
+                              continue;
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to send response: {}", e);
+                            }
                         }
                     } else {
                         globalDashMap.remove(&cloneDomain);
@@ -158,6 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Forward DoH response back to the client
                 if let Err(e) = socket.send_to(&response, src).await {
                     eprintln!("Failed to send response: {}", e);
+                    continue;
                 }
                 // 缓存响应
                 println!("Caching response for domain: {:?}", domainName);

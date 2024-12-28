@@ -4,7 +4,7 @@ dohs:
   - "https://208.67.222.222/dns-query"
   - "https://208.67.220.220/dns-query"
   - "https://120.53.53.53/dns-query"
-port: 53
+port: 153
 timeout: 5
 # default: 3 days
 clear_cache_interval: 259200
