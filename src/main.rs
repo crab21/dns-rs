@@ -30,8 +30,8 @@ struct Config {
 use std::sync::Arc;
 
 async fn create_dashmap(
-) -> Result<Arc<DashMap<String, DOHResponse>>, Box<dyn std::error::Error + Send + Sync>> {
-    let dashmap = Arc::new(DashMap::new());
+) -> Result<Arc<DashMap<String, Arc<DOHResponse>>>, Box<dyn std::error::Error + Send + Sync>> {
+    let dashmap: Arc<DashMap<String, Arc<DOHResponse>>> = Arc::new(DashMap::new());
     Ok(dashmap)
 }
 
@@ -50,6 +50,7 @@ struct DOHRequest {
     id: u16,
 }
 
+#[derive(Debug, Deserialize, Clone)]
 struct DOHResponse {
     pub resp: Vec<u8>,
     pub exipre_time: u64,
@@ -83,11 +84,13 @@ fn parse_ip_addresses(
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-fn parse_ip_ttl(response: &[u8]) -> Result<DOHResponse, Box<dyn std::error::Error + Send + Sync>> {
+fn parse_ip_ttl(
+    response: &[u8],
+) -> Result<Arc<DOHResponse>, Box<dyn std::error::Error + Send + Sync>> {
     let message = Message::from_bytes(response)?;
     let answers = message.answers();
     let ttl = answers.iter().map(|record| record.ttl()).min().unwrap_or(0);
-    let resp = DOHResponse {
+    let responseResult = DOHResponse {
         resp: response.to_vec(),
         exipre_time: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -95,7 +98,7 @@ fn parse_ip_ttl(response: &[u8]) -> Result<DOHResponse, Box<dyn std::error::Erro
             .as_secs()
             + ttl as u64,
     };
-    Ok(resp)
+    Ok(Arc::new(responseResult))
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]
@@ -163,7 +166,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 }
 
 async fn recv_and_do_resolve(
-    globalDashMap: Arc<DashMap<String, DOHResponse>>,
+    globalDashMap: Arc<DashMap<String, Arc<DOHResponse>>>,
     socket: Arc<UdpSocket>,
     client: Client,
     config: Config,
@@ -265,7 +268,8 @@ async fn recv_and_do_resolve(
             }
             // 缓存响应
             println!("Caching response for domain: {:?}", domainName.clone());
-            match parse_ip_ttl(response.clone().as_slice()) {
+            let rcopy = response.clone();
+            match parse_ip_ttl(rcopy.as_slice()) {
                 Ok(resp) => {
                     globalDashMap.insert(domainName, resp);
                     Ok(())
