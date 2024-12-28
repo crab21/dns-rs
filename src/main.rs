@@ -125,7 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap_or_else(|| vec![]);
             domainName = domain_names[0].clone(); // 正确更新 domainName
             if value.len() > 0 {
-                println!("Cache hit for domain: {:?}", domain_names[0]);
+                println!("Cache hit for domain: {:?}", cloneDomain);
                 let mut message = Message::from_bytes(&value)?;
                 message.set_id(dohRequest.id);
                 // 解析并打印 DNS 响应中的 IP 地址
@@ -137,12 +137,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
                     } else {
-                        eprintln!("dns len is zero,,,,Failed to parse DNS response, re-resolve dns domain {:?}", domain_names[0]);
+                        globalDashMap.remove(&cloneDomain);
+                        eprintln!("dns len is zero,,,,Failed to parse DNS response, re-resolve dns domain {:?}", cloneDomain);
                     }
                 } else {
+                    globalDashMap.remove(&cloneDomain);
                     eprintln!(
                         "Failed to parse DNS response,re-resolve dns domain {:?}",
-                        domain_names[0]
+                        cloneDomain
                     );
                 }
             }
