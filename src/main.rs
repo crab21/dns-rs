@@ -1,34 +1,35 @@
 use core::error;
+use dashmap::DashMap;
 use futures::future::{join, join_all};
 use reqwest::{Client, ClientBuilder};
 use serde::Deserialize;
+use std::borrow::{Borrow, BorrowMut};
 use std::error::Error;
 use std::io::Read;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration, Instant};
+use tokio::time::{interval, timeout, Duration, Instant};
 use trust_dns_proto::op::Message;
+use trust_dns_proto::rr::domain;
 use trust_dns_proto::serialize::binary::{BinDecodable, BinEncodable};
-
-#[derive(Deserialize, Debug)]
-struct Answer {
-    name: String,
-    data: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct DnsResponse {
-    Answer: Vec<Answer>,
-}
 
 use serde_yaml;
 use std::{fs, string};
+
+use once_cell::sync::Lazy;
 
 #[derive(Debug, Deserialize)]
 struct Config {
     dohs: Vec<String>,
     port: u16,
     timeout: u64,
+    clear_cache_interval: u64,
+}
+use std::sync::Arc;
+
+async fn create_dashmap() -> Result<Arc<DashMap<String, Vec<u8>>>, Box<dyn std::error::Error>> {
+    let dashmap = Arc::new(DashMap::new());
+    Ok(dashmap)
 }
 
 async fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
@@ -40,11 +41,19 @@ async fn create_client() -> Result<Client, Box<dyn std::error::Error>> {
     Ok(client)
 }
 
-fn parse_domain_name(query: &[u8]) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+struct DOHRequest {
+    domain_names: Vec<String>,
+    id: u16,
+}
+
+fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Error>> {
     let message = Message::from_bytes(query)?;
     let questions = message.queries();
     let domain_names = questions.iter().map(|q| q.name().to_string()).collect();
-    Ok(domain_names)
+    Ok(DOHRequest {
+        domain_names,
+        id: message.id(),
+    })
 }
 
 fn parse_ip_addresses(response: &[u8]) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -63,7 +72,7 @@ fn parse_ip_addresses(response: &[u8]) -> Result<Vec<String>, Box<dyn std::error
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    std::env::set_var("RING_NO_ASM", "1");
+    let globalDashMap = create_dashmap().await?;
 
     // 读取 YAML 文件
     let yaml_content = fs::read_to_string("config.yaml")?;
@@ -81,7 +90,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = create_client().await?;
 
     let mut buf = [0u8; 512];
+
+    let globalDashMap_clone = globalDashMap.clone();
+    tokio::spawn(async move {
+        let mut interval = interval(Duration::from_secs(config.clear_cache_interval));
+        loop {
+            interval.tick().await;
+            globalDashMap_clone.clear(); // 清空 map
+            println!("Map cleared!");
+        }
+    });
+
     loop {
+        let mut domainName = String::from("");
         // Receive data
         let (len, src) = match socket.recv_from(&mut buf).await {
             Ok((len, src)) => (len, src),
@@ -92,8 +113,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         // 解析并打印 DNS 请求的域名
-        if let Ok(domain_names) = parse_domain_name(&buf[..len]) {
+
+        if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
+            let domain_names = dohRequest.domain_names;
             println!("Received query for domains: {:?}", domain_names);
+            let cloneDomain = domain_names[0].clone();
+            let globalDashMap = globalDashMap.clone();
+            let value = globalDashMap
+                .get(&cloneDomain)
+                .map(|v| v.clone())
+                .unwrap_or_else(|| vec![]);
+            domainName = domain_names[0].clone(); // 正确更新 domainName
+            if value.len() > 0 {
+                println!("Cache hit for domain: {:?}", domain_names[0]);
+                let mut message = Message::from_bytes(&value)?;
+                message.set_id(dohRequest.id);
+                if let Err(e) = socket.send_to(&message.to_vec().unwrap(), src).await {
+                    eprintln!("Failed to send response: {}", e);
+                }
+                // 解析并打印 DNS 响应中的 IP 地址
+                if let Ok(ips) = parse_ip_addresses(&value) {
+                    println!("Response contains IPs: {:?}, from DOH: []", ips);
+                } else {
+                    eprintln!("Failed to parse DNS response");
+                }
+                continue;
+            }
         } else {
             eprintln!("Failed to parse DNS query");
         }
@@ -106,6 +151,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Err(e) = socket.send_to(&response, src).await {
                     eprintln!("Failed to send response: {}", e);
                 }
+                // 缓存响应
+                println!("Caching response for domain: {:?}", domainName);
+                globalDashMap.insert(domainName, response.clone());
             }
             Err(e) => eprintln!("DoH request failed: {}", e),
         }
