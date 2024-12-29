@@ -26,6 +26,7 @@ struct Config {
     port: u16,
     timeout: u64,
     clear_cache_interval: u64,
+    ttl_duration: u64,
 }
 use std::sync::Arc;
 
@@ -86,6 +87,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 fn parse_ip_ttl(
     response: &[u8],
+    config: Config,
 ) -> Result<Arc<DOHResponse>, Box<dyn std::error::Error + Send + Sync>> {
     let message = Message::from_bytes(response)?;
     let answers = message.answers();
@@ -96,7 +98,8 @@ fn parse_ip_ttl(
             .duration_since(UNIX_EPOCH)
             .expect("Time went backwards")
             .as_secs()
-            + ttl as u64,
+            + (ttl as u64)
+            + config.ttl_duration,
     };
     Ok(Arc::new(responseResult))
 }
@@ -269,7 +272,7 @@ async fn recv_and_do_resolve(
             // 缓存响应
             println!("Caching response for domain: {:?}", domainName.clone());
             let rcopy = response.clone();
-            match parse_ip_ttl(rcopy.as_slice()) {
+            match parse_ip_ttl(rcopy.as_slice(), config) {
                 Ok(resp) => {
                     globalDashMap.insert(domainName, resp);
                     Ok(())

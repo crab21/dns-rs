@@ -8,3 +8,4 @@ port: 153
 timeout: 5
 # default: 3 days
 clear_cache_interval: 259200
+ttl_duration: 36000
