@@ -275,21 +275,15 @@ async fn recv_and_do_resolve(
                             .expect("Time went backwards")
                             .as_secs()
                     {
-                      println!("Cache expired for domain: {:?}", cloneDomain);
-                      return vec![]
+                        println!("Cache expired for domain: {:?}", cloneDomain);
+                        return vec![];
                     }
-                    println!(
-                        "Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []",
-                        cloneDomain,
-                        parse_ip_addresses(&v.resp).unwrap()
-                    );
                     v.resp.clone()
                 } else {
                     v.resp.clone()
                 }
             })
             .unwrap_or_else(|| vec![]);
-        println!("globalDashMap len is: {:?}", globalDashPreMap.len());
         domainName = domain_names[0].clone(); // 正确更新 domainName
         if value.len() > 0 {
             println!();
@@ -383,7 +377,7 @@ async fn recv_and_do_resolve(
 /// Forward DNS query to the fastest DoH server from a list of servers
 async fn forward_to_fastest_doh(
     client: &Client,
-    domainName: String,
+    domain: String,
     requestBody: Vec<u8>,
     doh_urls: Vec<String>,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
@@ -391,6 +385,7 @@ async fn forward_to_fastest_doh(
     let (tx, mut rx) = mpsc::channel::<Option<(Duration, Vec<u8>, String)>>(1); // 通道的缓冲区为 1
                                                                                 // Spawn asynchronous tasks for each DoH server
     for url in doh_urls {
+        let domainName = domain.clone();
         let client = client.clone();
         let query = requestBody.to_vec();
         let tx = tx.clone(); // 克隆发送者，确保每个任务都有一个发送通道
@@ -418,7 +413,10 @@ async fn forward_to_fastest_doh(
                 }
 
                 Ok(Ok(resp)) if resp.status().is_success() == false => {
-                    println!("[NOT-SUCCESS] Failed to send request to {}", urlClone);
+                    println!(
+                        "[NOT-SUCCESS] domain: {:?}, Failed to send request to {}",
+                        domainName, urlClone
+                    );
                     eprintln!(
                         "Failed to send request to {}",
                         resp.text().await.unwrap_or_default()
@@ -430,20 +428,23 @@ async fn forward_to_fastest_doh(
 
                 Ok(Err(e)) => {
                     // 处理 reqwest 错误
-                    eprintln!("Failed to send request: {}", e);
+                    eprintln!("domain: {:?},Failed to send request: {}", domainName, e);
                     tx.send(None)
                         .await
                         .unwrap_or_else(|err| (println!("{:?}", err)));
                 }
                 Err(e) => {
                     // 处理超时错误
-                    eprintln!("Request timed out: {}", e);
+                    eprintln!("domain: {:?}, Request timed out: {}", domainName, e);
                     tx.send(None)
                         .await
                         .unwrap_or_else(|err| (println!("{:?}", err)));
                 }
                 _ => {
-                    println!("Failed to send request to {}", urlClone);
+                    println!(
+                        "domain: {:?},Failed to send request to {}",
+                        domainName, urlClone
+                    );
                     tx.send(None)
                         .await
                         .unwrap_or_else(|err| (println!("{:?}", err)));
@@ -455,10 +456,16 @@ async fn forward_to_fastest_doh(
 
     // 等待第一个完成的结果
     if let Some((elapsed, response, url)) = rx.recv().await.flatten() {
-        println!("Received response from {} in {:?}", url, elapsed);
+        println!(
+            "Received domain: {:?} response from {} in {:?}",
+            domain, url, elapsed
+        );
         // 解析并打印 DNS 响应中的 IP 地址
         if let Ok(ips) = parse_ip_addresses(&response) {
-            println!("Response contains IPs: {:?}, from DOH: [{}]", ips, url);
+            println!(
+                "Response domain: {:?} contains IPs: {:?}, from DOH: [{}]",
+                domain, ips, url
+            );
         } else {
             eprintln!("Failed to parse DNS response");
         }
