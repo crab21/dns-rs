@@ -1,8 +1,10 @@
 use core::error;
 use dashmap::{DashMap, Map};
 use futures::future::{join, join_all};
+use futures::TryFutureExt;
 use reqwest::{Client, ClientBuilder};
 use serde::Deserialize;
+use std::alloc::System;
 use std::borrow::{Borrow, BorrowMut};
 use std::error::Error;
 use std::io::Read;
@@ -51,10 +53,13 @@ struct DOHRequest {
     id: u16,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 struct DOHResponse {
     pub resp: Vec<u8>,
     pub exipre_time: u64,
+    pub ttl: u64,
+    pub last_update: u64,
+    pub first_update: u64,
 }
 
 fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Error + Send + Sync>> {
@@ -92,16 +97,74 @@ fn parse_ip_ttl(
     let message = Message::from_bytes(response)?;
     let answers = message.answers();
     let ttl = answers.iter().map(|record| record.ttl()).min().unwrap_or(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_secs();
     let responseResult = DOHResponse {
         resp: response.to_vec(),
-        exipre_time: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("Time went backwards")
-            .as_secs()
-            + (ttl as u64)
-            + config.ttl_duration,
+        exipre_time: now + (ttl as u64) + config.ttl_duration,
+        ttl: ttl as u64,
+        last_update: now,
+        first_update: now,
+        ..Default::default()
     };
     Ok(Arc::new(responseResult))
+}
+
+async fn find_and_update(
+    domain: String,
+    globalDashMap: Arc<DashMap<String, Arc<DOHResponse>>>,
+    client: &Client,
+    doh_urls: Vec<String>,
+    requestBody: Vec<u8>,
+    config: Config,
+) {
+    let global_dash_map_clone = Arc::clone(&globalDashMap);
+    let client_clone = client.clone();
+    let config_clone = config.clone();
+    let domain_clone = domain.clone();
+    tokio::spawn(async move {
+        let ttl = global_dash_map_clone
+            .get(&domain_clone)
+            .map(|v| {
+                println!("start to check ttl{:?}", domain_clone);
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("Time went backwards")
+                    .as_secs();
+                if v.ttl > 0 && (now - v.last_update) < v.ttl {
+                    return 0;
+                }
+                if (now - v.last_update) < 60 {
+                    return v.ttl;
+                }
+                v.ttl
+            })
+            .unwrap_or_else(|| 0);
+        if ttl == 0 {
+            return;
+        }
+
+        if let Ok(rr) =
+            forward_to_fastest_doh(&client_clone, domain_clone, requestBody, doh_urls).await
+        {
+            let rcopy = rr.clone();
+            match parse_ip_ttl(rcopy.as_slice(), config_clone) {
+                Ok(resp) => {
+                    println!(
+                        "*******Caching response for domain: {:?}*******",
+                        domain.clone()
+                    );
+                    global_dash_map_clone.insert(domain, resp);
+                }
+                Err(e) => {
+                    eprintln!("Failed to parse TTL: {}", e);
+                }
+            }
+        };
+        println!("globalDashMap len is: {:?}", globalDashMap.len());
+    });
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 16)]
@@ -183,8 +246,8 @@ async fn recv_and_do_resolve(
         let domain_names = dohRequest.domain_names;
         println!("Received query for domains: {:?}", domain_names);
         let cloneDomain = domain_names[0].clone();
-        let value = globalDashMap
-            .get(&cloneDomain)
+        let v = globalDashMap.get(&cloneDomain);
+        let value = v
             .map(|v| {
                 // 转换为 UTC 时间
                 let datetime = Utc.timestamp_opt(v.exipre_time as i64, 0).unwrap();
@@ -227,8 +290,18 @@ async fn recv_and_do_resolve(
                         cloneDomain, ips
                     );
                     let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
+
                     match sendRespose {
                         Ok(_) => {
+                            find_and_update(
+                                cloneDomain,
+                                globalDashMap,
+                                &client,
+                                config.dohs.clone(),
+                                buf[..len].to_vec(),
+                                config.clone(),
+                            )
+                            .await;
                             return Ok(());
                         }
                         Err(e) => {
