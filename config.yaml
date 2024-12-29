@@ -7,5 +7,6 @@ dohs:
 port: 153
 timeout: 5
 # default: 3 days
+enable_clear_expired_cache: true
 clear_cache_interval: 259200
 ttl_duration: 36000
