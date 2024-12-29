@@ -29,6 +29,7 @@ struct Config {
     timeout: u64,
     clear_cache_interval: u64,
     ttl_duration: u64,
+    enable_clear_expired_cache: bool,
 }
 use std::sync::Arc;
 
@@ -258,12 +259,16 @@ async fn recv_and_do_resolve(
                     "v.expire_time: {:?}, format time: {:?}",
                     v.exipre_time, formatted
                 );
-                if v.exipre_time
-                    > SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("Time went backwards")
-                        .as_secs()
-                {
+                if config.enable_clear_expired_cache {
+                    if v.exipre_time
+                        < SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .expect("Time went backwards")
+                            .as_secs()
+                    {
+                      println!("Cache expired for domain: {:?}", cloneDomain);
+                      return vec![]
+                    }
                     println!(
                         "Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []",
                         cloneDomain,
@@ -271,8 +276,7 @@ async fn recv_and_do_resolve(
                     );
                     v.resp.clone()
                 } else {
-                    println!("Cache expired for domain: {:?}", cloneDomain);
-                    vec![]
+                    v.resp.clone()
                 }
             })
             .unwrap_or_else(|| vec![]);
