@@ -2,7 +2,11 @@ use core::error;
 use dashmap::{DashMap, Map};
 use futures::future::{join, join_all};
 use futures::TryFutureExt;
+use hickory_client::op::{Message, Query};
+use hickory_client::rr::domain;
 use hickory_client::rr::rdata::NULL;
+use hickory_client::rr::{Name, RecordType};
+use hickory_client::serialize::binary::{BinDecodable, BinEncodable};
 use reqwest::{Client, ClientBuilder};
 use serde::Deserialize;
 use std::alloc::System;
@@ -12,10 +16,6 @@ use std::io::Read;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{interval, timeout, Duration, Instant};
-use hickory_client::op::{Message, Query};
-use hickory_client::rr::domain;
-use hickory_client::rr::{Name, RecordType};
-use hickory_client::serialize::binary::{BinDecodable, BinEncodable};
 
 use serde_yaml;
 use std::{fs, string};
@@ -46,7 +46,7 @@ async fn create_client() -> Result<Client, Box<dyn std::error::Error + Send + Sy
         .http2_keep_alive_interval(Some((Duration::from_secs(600)))) // 设置 HTTP/2 保活时间
         .http2_keep_alive_while_idle(true)
         .http2_prior_knowledge() // 启用 HTTP/2 优化
-        .https_only(true) 
+        .https_only(true)
         .http3_prior_knowledge()
         .pool_max_idle_per_host(900) // 设置每个主机的最大空闲连接数
         .pool_idle_timeout(None) // 设置连接池空闲超时时间
@@ -94,10 +94,15 @@ fn parse_ip_addresses(
     let answers = message.answers();
     let ips = answers
         .iter()
-        .filter_map(|record| match record.data().unwrap_or(&hickory_client::rr::RData::NULL(Default::default())) {
-            hickory_client::rr::RData::A(ip) => Some(ip.to_string()),
-            hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()),
-            _ => None,
+        .filter_map(|record| {
+            match record
+                .data()
+                .unwrap_or(&hickory_client::rr::RData::NULL(Default::default()))
+            {
+                hickory_client::rr::RData::A(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()),
+                _ => None,
+            }
         })
         .collect();
     Ok(ips)
@@ -112,13 +117,32 @@ fn parse_ip_ttl(
     let message = Message::from_bytes(response)?;
     let answers = message.answers();
     let ttl = answers.iter().map(|record| record.ttl()).min().unwrap_or(0);
+    let ips: Vec<String> = answers
+        .iter()
+        .filter_map(|record| {
+            match record
+                .data()
+                .unwrap_or(&hickory_client::rr::RData::NULL(Default::default()))
+            {
+                hickory_client::rr::RData::A(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()),
+                _ => None,
+            }
+        })
+        .collect();
+
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards")
         .as_secs();
+    let mut expire_time = now + (ttl as u64) + config.ttl_duration;
+    if ips.get(0).unwrap().contains(":") {
+        expire_time = expire_time - config.ttl_duration;
+    }
+
     let responseResult = DOHResponse {
         resp: response.to_vec(),
-        exipre_time: now + (ttl as u64) + config.ttl_duration,
+        exipre_time: expire_time,
         ttl: ttl as u64,
         last_update: now,
         first_update: now,
@@ -150,7 +174,7 @@ async fn find_and_update(
                     .duration_since(UNIX_EPOCH)
                     .expect("Time went backwards")
                     .as_secs();
-                if v.ttl > 0 && (now - v.last_update) <= (v.ttl + 8) {
+                if v.ttl > 0 && (now - v.last_update) <= v.ttl {
                     return 0;
                 }
                 if (now - v.last_update) < 60 {
@@ -279,8 +303,8 @@ async fn recv_and_do_resolve(
                 // 格式化为字符串
                 let formatted = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
                 println!(
-                    "v.expire_time: {:?}, format time: {:?}",
-                    v.exipre_time, formatted
+                    "v.expire_time: {:?}, format time: {:?}, ttl: {:?}",
+                    v.exipre_time, formatted, v.ttl
                 );
                 if config.enable_clear_expired_cache {
                     if v.exipre_time
@@ -289,7 +313,10 @@ async fn recv_and_do_resolve(
                             .expect("Time went backwards")
                             .as_secs()
                     {
-                        println!("Cache expired for domain: {:?}", cloneDomain);
+                        println!(
+                            "Cache expired for domain: {:?}, v.expire_time: {:?}, format time: {:?}, ttl: {:?}",
+                            cloneDomain, v.exipre_time, formatted, v.ttl
+                        );
                         return vec![];
                     }
                     v.resp.clone()
@@ -307,23 +334,25 @@ async fn recv_and_do_resolve(
             if let Ok(ips) = parse_ip_addresses(&value) {
                 if ips.len() > 0 {
                     println!(
-                        "Cache hit for domain: {:?} ,Response contains IPs: {:?}, from DOH: []",
-                        cloneDomain, ips
+                        "Cache hit for domain: {:?} ,Response contains IPs: {:?}, ttl: {:?}",
+                        cloneDomain,
+                        ips,
+                        v.unwrap().ttl
                     );
                     let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
 
                     match sendRespose {
                         Ok(_) => {
-                            find_and_update(
-                                cloneDomain,
-                                globalDashMap,
-                                globalDashPreMap,
-                                &client,
-                                config.dohs.clone(),
-                                buf[..len].to_vec(),
-                                config.clone(),
-                            )
-                            .await;
+                            // find_and_update(
+                            //     cloneDomain,
+                            //     globalDashMap,
+                            //     globalDashPreMap,
+                            //     &client,
+                            //     config.dohs.clone(),
+                            //     buf[..len].to_vec(),
+                            //     config.clone(),
+                            // )
+                            // .await;
                             return Ok(());
                         }
                         Err(e) => {
