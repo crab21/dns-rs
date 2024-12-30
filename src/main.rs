@@ -136,7 +136,7 @@ fn parse_ip_ttl(
         .expect("Time went backwards")
         .as_secs();
     let mut expire_time = now + (ttl as u64) + config.ttl_duration;
-    if ips.len() > 0 && ips.get(0).unwrap_or_else("").contains(":") {
+    if ips.len() > 0 && ips.get(0).unwrap_or(&String::from("")).contains(":") {
         expire_time = expire_time - config.ttl_duration;
     }
 
