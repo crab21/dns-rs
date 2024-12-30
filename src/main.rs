@@ -42,6 +42,9 @@ async fn create_dashmap(
 
 async fn create_client() -> Result<Client, Box<dyn std::error::Error + Send + Sync>> {
     let client = ClientBuilder::new()
+        .tcp_keepalive(Some(Duration::from_secs(600))) // 设置 TCP 保活时间
+        .http2_keep_alive_interval(Some((Duration::from_secs(600)))) // 设置 HTTP/2 保活时间
+        .http2_keep_alive_while_idle(true)
         .http2_prior_knowledge() // 启用 HTTP/2 优化
         .pool_max_idle_per_host(900) // 设置每个主机的最大空闲连接数
         .pool_idle_timeout(Some(Duration::from_secs(90))) // 设置连接池空闲超时时间
