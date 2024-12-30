@@ -2,6 +2,7 @@ use core::error;
 use dashmap::{DashMap, Map};
 use futures::future::{join, join_all};
 use futures::TryFutureExt;
+use hickory_client::rr::rdata::NULL;
 use reqwest::{Client, ClientBuilder};
 use serde::Deserialize;
 use std::alloc::System;
@@ -11,10 +12,10 @@ use std::io::Read;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::{interval, timeout, Duration, Instant};
-use trust_dns_proto::op::{Message, Query};
-use trust_dns_proto::rr::domain;
-use trust_dns_proto::rr::{Name, RecordType};
-use trust_dns_proto::serialize::binary::{BinDecodable, BinEncodable};
+use hickory_client::op::{Message, Query};
+use hickory_client::rr::domain;
+use hickory_client::rr::{Name, RecordType};
+use hickory_client::serialize::binary::{BinDecodable, BinEncodable};
 
 use serde_yaml;
 use std::{fs, string};
@@ -80,9 +81,9 @@ fn parse_ip_addresses(
     let answers = message.answers();
     let ips = answers
         .iter()
-        .filter_map(|record| match record.rdata() {
-            trust_dns_proto::rr::RData::A(ip) => Some(ip.to_string()),
-            trust_dns_proto::rr::RData::AAAA(ip) => Some(ip.to_string()),
+        .filter_map(|record| match record.data().unwrap_or(&hickory_client::rr::RData::NULL(Default::default())) {
+            hickory_client::rr::RData::A(ip) => Some(ip.to_string()),
+            hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()),
             _ => None,
         })
         .collect();
