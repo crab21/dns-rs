@@ -136,11 +136,11 @@ async fn find_and_update(
                     .duration_since(UNIX_EPOCH)
                     .expect("Time went backwards")
                     .as_secs();
-                if v.ttl > 0 && (now - v.last_update) < v.ttl {
+                if v.ttl > 0 && (now - v.last_update) <= v.ttl {
                     return 0;
                 }
                 if (now - v.last_update) < 60 {
-                    return v.ttl;
+                    return 0;
                 }
                 v.ttl
             })
