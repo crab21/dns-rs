@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build
-        run: cargo build --verbose
+        run: RUSTFLAGS='--cfg reqwest_unstable' cargo build --verbose
       - name: Upload error logs
         uses: actions/upload-artifact@v4
         with:
