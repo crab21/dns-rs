@@ -295,6 +295,7 @@ async fn recv_and_do_resolve(
         println!("Received query for domains: {:?}", domain_names);
         let cloneDomain = domain_names[0].clone();
         let v = globalDashMap.get(&cloneDomain);
+        let mut ttlTmp: u64 = 0;
         let value = v
             .map(|v| {
                 // 转换为 UTC 时间
@@ -302,9 +303,10 @@ async fn recv_and_do_resolve(
 
                 // 格式化为字符串
                 let formatted = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
+                ttlTmp = v.ttl;
                 println!(
                     "v.expire_time: {:?}, format time: {:?}, ttl: {:?}",
-                    v.exipre_time, formatted, v.ttl
+                    v.exipre_time, formatted, ttlTmp
                 );
                 if config.enable_clear_expired_cache {
                     if v.exipre_time
@@ -315,7 +317,7 @@ async fn recv_and_do_resolve(
                     {
                         println!(
                             "Cache expired for domain: {:?}, v.expire_time: {:?}, format time: {:?}, ttl: {:?}",
-                            cloneDomain, v.exipre_time, formatted, v.ttl
+                            cloneDomain, v.exipre_time, formatted, ttlTmp
                         );
                         return vec![];
                     }
@@ -337,7 +339,7 @@ async fn recv_and_do_resolve(
                         "Cache hit for domain: {:?} ,Response contains IPs: {:?}, ttl: {:?}",
                         cloneDomain,
                         ips,
-                        v.unwrap().ttl
+                        ttlTmp
                     );
                     let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
 
