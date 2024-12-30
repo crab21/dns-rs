@@ -300,7 +300,7 @@ async fn recv_and_do_resolve(
             .map(|v| {
                 // 转换为 UTC 时间
                 let datetime = Utc.timestamp_opt(v.exipre_time as i64, 0).unwrap();
-
+                let datetime_shanghai = datetime.with_timezone(&chrono_tz::Asia::Shanghai);
                 // 格式化为字符串
                 let formatted = datetime.format("%Y-%m-%d %H:%M:%S").to_string();
                 ttlTmp = v.ttl;
