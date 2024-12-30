@@ -109,6 +109,7 @@ fn parse_ip_addresses(
 }
 
 use std::time::{SystemTime, UNIX_EPOCH};
+use rand::Rng; // 导入 Rng trait
 
 fn parse_ip_ttl(
     response: &[u8],
@@ -135,9 +136,11 @@ fn parse_ip_ttl(
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards")
         .as_secs();
-    let mut expire_time = now + (ttl as u64) + config.ttl_duration;
+    let mut rng = rand::thread_rng(); // 创建随机数生成器
+    let random_number: i32 = rng.gen_range(15..=100); // 生成 1 到 100 的随机整数
+    let mut expire_time = now + (ttl as u64) + config.ttl_duration + (random_number as u64);
     if ips.len() > 0 && ips.get(0).unwrap_or(&String::from("")).contains(":") {
-        expire_time = expire_time - config.ttl_duration;
+        expire_time = expire_time - config.ttl_duration - (random_number as u64);
     }
 
     let responseResult = DOHResponse {
@@ -337,9 +340,7 @@ async fn recv_and_do_resolve(
                 if ips.len() > 0 {
                     println!(
                         "Cache hit for domain: {:?} ,Response contains IPs: {:?}, ttl: {:?}",
-                        cloneDomain,
-                        ips,
-                        ttlTmp
+                        cloneDomain, ips, ttlTmp
                     );
                     let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
 
