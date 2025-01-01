@@ -13,3 +13,5 @@ ttl_duration: 36000
 resolve_skip_domains:
   - "epg.aptv.app."
 enable_cache: true
+map_init_capacity: 65535
+map_init_shard_amount: 8192

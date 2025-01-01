@@ -33,12 +33,16 @@ struct Config {
     enable_clear_expired_cache: bool,
     resolve_skip_domains: Vec<String>,
     enable_cache: bool,
+    map_init_capacity: u64,
+    map_init_shard_amount: u64,
 }
 use std::sync::Arc;
 
 async fn create_dashmap(
+  config: Config
 ) -> Result<Arc<DashMap<String, Arc<DOHResponse>>>, Box<dyn std::error::Error + Send + Sync>> {
-    let dashmap: Arc<DashMap<String, Arc<DOHResponse>>> = Arc::new(DashMap::with_capacity_and_shard_amount(65535,8192));
+    let dashmap: Arc<DashMap<String, Arc<DOHResponse>>> =
+        Arc::new(DashMap::with_capacity_and_shard_amount(config.map_init_capacity as usize, config.map_init_shard_amount as usize));
     Ok(dashmap)
 }
 
@@ -216,9 +220,6 @@ async fn find_and_update(
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1024)]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let globalDashMap = create_dashmap().await?;
-    let globalDashPreMap = create_dashmap().await?;
-
     // 读取 YAML 文件
     let yaml_content = fs::read_to_string("config.yaml")?;
 
@@ -227,6 +228,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // 打印解析后的结果
     println!("Config: {:?}", config);
+    let globalDashMap = create_dashmap(config.clone()).await?;
+    let globalDashPreMap = create_dashmap(config.clone()).await?;
 
     // Listen on UDP port 53
     let address = format!("{}{}", "0.0.0.0:", config.port);
