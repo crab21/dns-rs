@@ -32,6 +32,7 @@ struct Config {
     ttl_duration: u64,
     enable_clear_expired_cache: bool,
     resolve_skip_domains: Vec<String>,
+    enable_cache: bool,
 }
 use std::sync::Arc;
 
@@ -238,6 +239,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let global_dash_map_clone_pre = Arc::clone(&globalDashPreMap);
     let global_dash_map_clone = Arc::clone(&globalDashMap);
     tokio::spawn(async move {
+        if config.enable_cache == false {
+            return;
+        }
+
         let mut interval = interval(Duration::from_secs(config.clear_cache_interval));
         loop {
             interval.tick().await;
@@ -256,29 +261,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 continue;
             }
         };
-        let global_dash_map_clone = Arc::clone(&globalDashMap);
-        let global_dash_map_clone_pre = Arc::clone(&globalDashPreMap);
         let client_clone = client.clone();
         let config_clone = config.clone();
         let buf_clone = buf.clone();
         let src_clone = src.clone();
         let socket_clone = Arc::clone(&socket);
-        let _ = tokio::spawn(async move {
-            if let Err(e) = recv_and_do_resolve(
-                global_dash_map_clone,
-                global_dash_map_clone_pre,
-                socket_clone,
-                client_clone,
-                config_clone,
-                buf_clone,
-                len,
-                src_clone,
-            )
-            .await
-            {
-                eprintln!("Error in recv_and_do_resolve: {:?}", e);
-            }
-        });
+        if config.enable_cache {
+            let global_dash_map_clone = Arc::clone(&globalDashMap);
+            let global_dash_map_clone_pre = Arc::clone(&globalDashPreMap);
+            let _ = tokio::spawn(async move {
+                if let Err(e) = recv_and_do_resolve(
+                    global_dash_map_clone,
+                    global_dash_map_clone_pre,
+                    socket_clone,
+                    client_clone,
+                    config_clone,
+                    buf_clone,
+                    len,
+                    src_clone,
+                )
+                .await
+                {
+                    eprintln!("Error in recv_and_do_resolve: {:?}", e);
+                }
+            });
+        } else {
+            let _ = tokio::spawn(async move {
+                if let Err(e) = recv_and_do_resolve(
+                    Default::default(),
+                    Default::default(),
+                    socket_clone,
+                    client_clone,
+                    config_clone,
+                    buf_clone,
+                    len,
+                    src_clone,
+                )
+                .await
+                {
+                    eprintln!("Error in recv_and_do_resolve: {:?}", e);
+                }
+            });
+        }
     }
 }
 
@@ -294,13 +318,14 @@ async fn recv_and_do_resolve(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 解析并打印 DNS 请求的域名
     let mut domainName = String::from("");
-    if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
-        let domain_names = dohRequest.domain_names;
-        println!("Received query for domains: {:?}", domain_names);
-        let cloneDomain = domain_names[0].clone();
-        let v = globalDashMap.get(&cloneDomain);
-        let mut ttlTmp: u64 = 0;
-        let value = v
+    if config.enable_cache {
+        if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
+            let domain_names = dohRequest.domain_names;
+            println!("Received query for domains: {:?}", domain_names);
+            let cloneDomain = domain_names[0].clone();
+            let v = globalDashMap.get(&cloneDomain);
+            let mut ttlTmp: u64 = 0;
+            let value = v
             .map(|v| {
                 // 转换为 UTC 时间
                 let datetime = Utc.timestamp_opt(v.exipre_time as i64, 0).unwrap();
@@ -331,57 +356,63 @@ async fn recv_and_do_resolve(
                 }
             })
             .unwrap_or_else(|| vec![]);
-        domainName = domain_names[0].clone(); // 正确更新 domainName
-        if value.len() > 0 {
-            println!();
-            let mut message = Message::from_bytes(&value)?;
-            message.set_id(dohRequest.id);
-            // 解析并打印 DNS 响应中的 IP 地址
-            if let Ok(ips) = parse_ip_addresses(&value) {
-                if ips.len() > 0 {
-                    println!(
-                        "Cache hit for domain: {:?} ,Response contains IPs: {:?}, ttl: {:?}",
-                        cloneDomain, ips, ttlTmp
-                    );
-                    let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
+            domainName = domain_names[0].clone(); // 正确更新 domainName
+            if value.len() > 0 {
+                println!();
+                let mut message = Message::from_bytes(&value)?;
+                message.set_id(dohRequest.id);
+                // 解析并打印 DNS 响应中的 IP 地址
+                if let Ok(ips) = parse_ip_addresses(&value) {
+                    if ips.len() > 0 {
+                        println!(
+                            "Cache hit for domain: {:?} ,Response contains IPs: {:?}, ttl: {:?}",
+                            cloneDomain, ips, ttlTmp
+                        );
+                        let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
 
-                    match sendRespose {
-                        Ok(_) => {
-                            // find_and_update(
-                            //     cloneDomain,
-                            //     globalDashMap,
-                            //     globalDashPreMap,
-                            //     &client,
-                            //     config.dohs.clone(),
-                            //     buf[..len].to_vec(),
-                            //     config.clone(),
-                            // )
-                            // .await;
-                            return Ok(());
+                        match sendRespose {
+                            Ok(_) => {
+                                // find_and_update(
+                                //     cloneDomain,
+                                //     globalDashMap,
+                                //     globalDashPreMap,
+                                //     &client,
+                                //     config.dohs.clone(),
+                                //     buf[..len].to_vec(),
+                                //     config.clone(),
+                                // )
+                                // .await;
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to send response: {}", e);
+                            }
                         }
-                        Err(e) => {
-                            eprintln!("Failed to send response: {}", e);
-                        }
+                    } else {
+                        globalDashMap.remove(&cloneDomain);
+                        globalDashPreMap.remove(&cloneDomain);
+                        eprintln!("dns len is zero,,,,Failed to parse DNS response, re-resolve dns domain {:?}", cloneDomain);
                     }
                 } else {
                     globalDashMap.remove(&cloneDomain);
                     globalDashPreMap.remove(&cloneDomain);
-                    eprintln!("dns len is zero,,,,Failed to parse DNS response, re-resolve dns domain {:?}", cloneDomain);
+                    eprintln!(
+                        "Failed to parse DNS response,re-resolve dns domain {:?}",
+                        cloneDomain
+                    );
                 }
             } else {
                 globalDashMap.remove(&cloneDomain);
                 globalDashPreMap.remove(&cloneDomain);
-                eprintln!(
-                    "Failed to parse DNS response,re-resolve dns domain {:?}",
-                    cloneDomain
-                );
             }
         } else {
-            globalDashMap.remove(&cloneDomain);
-            globalDashPreMap.remove(&cloneDomain);
+            eprintln!("Failed to parse DNS query to get domain name");
         }
     } else {
-        eprintln!("Failed to parse DNS query to get domain name");
+        if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
+            let domain_names = dohRequest.domain_names;
+            domainName = domain_names[0].clone(); // 正确更新 domainName
+        }
     }
 
     println!("Received DNS query from {}", src);
@@ -402,12 +433,15 @@ async fn recv_and_do_resolve(
                 return Err(e.into());
             }
             // 缓存响应
+            let cc = config.clone();
             println!("Caching response for domain: {:?}", domainName.clone());
             let rcopy = response.clone();
             match parse_ip_ttl(rcopy.as_slice(), config) {
                 Ok(resp) => {
-                    globalDashMap.insert(domainName.clone(), resp.clone());
-                    globalDashPreMap.insert(domainName, resp);
+                    if cc.enable_cache {
+                        globalDashMap.insert(domainName.clone(), resp.clone());
+                        globalDashPreMap.insert(domainName, resp);
+                    }
                     Ok(())
                 }
                 Err(e) => {
