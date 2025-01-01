@@ -212,7 +212,7 @@ async fn find_and_update(
     });
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 512)]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let globalDashMap = create_dashmap().await?;
     let globalDashPreMap = create_dashmap().await?;
