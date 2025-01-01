@@ -108,8 +108,8 @@ fn parse_ip_addresses(
     Ok(ips)
 }
 
-use std::time::{SystemTime, UNIX_EPOCH};
-use rand::Rng; // 导入 Rng trait
+use rand::Rng;
+use std::time::{SystemTime, UNIX_EPOCH}; // 导入 Rng trait
 
 fn parse_ip_ttl(
     response: &[u8],
@@ -191,7 +191,7 @@ async fn find_and_update(
         }
 
         if let Ok(rr) =
-            forward_to_fastest_doh(&client_clone, domain_clone, requestBody, doh_urls).await
+            forward_to_fastest_doh(&client_clone, domain_clone, requestBody, doh_urls, config).await
         {
             let rcopy = rr.clone();
             match parse_ip_ttl(rcopy.as_slice(), config_clone) {
@@ -390,6 +390,7 @@ async fn recv_and_do_resolve(
         domainName.clone(),
         buf[..len].to_vec(),
         config.dohs.clone(),
+        config.clone(),
     )
     .await
     {
@@ -426,6 +427,7 @@ async fn forward_to_fastest_doh(
     domain: String,
     requestBody: Vec<u8>,
     doh_urls: Vec<String>,
+    config: Config,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let client = Client::new();
     let (tx, mut rx) = mpsc::channel::<Option<(Duration, Vec<u8>, String)>>(1); // 通道的缓冲区为 1
@@ -445,6 +447,7 @@ async fn forward_to_fastest_doh(
                     .post(url)
                     .header("Content-Type", "application/dns-message")
                     .body(query)
+                    .timeout(Duration::from_millis(config.timeout))
                     .send(),
             )
             .await;
