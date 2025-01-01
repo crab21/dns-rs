@@ -31,6 +31,7 @@ struct Config {
     clear_cache_interval: u64,
     ttl_duration: u64,
     enable_clear_expired_cache: bool,
+    resolve_skip_domains: Vec<String>,
 }
 use std::sync::Arc;
 
@@ -47,7 +48,7 @@ async fn create_client() -> Result<Client, Box<dyn std::error::Error + Send + Sy
         .http2_keep_alive_while_idle(true)
         .http2_prior_knowledge() // 启用 HTTP/2 优化
         .https_only(true)
-        .http3_prior_knowledge()
+        // .http3_prior_knowledge()
         .pool_max_idle_per_host(900) // 设置每个主机的最大空闲连接数
         .pool_idle_timeout(None) // 设置连接池空闲超时时间
         .default_headers({
@@ -58,7 +59,7 @@ async fn create_client() -> Result<Client, Box<dyn std::error::Error + Send + Sy
             );
             headers
         })
-        .set_tls_enable_early_data(true) // 启用 TLS 1.3 0-RTT
+        // .set_tls_enable_early_data(true) // 启用 TLS 1.3 0-RTT
         .build()?;
     Ok(client)
 }
@@ -438,15 +439,30 @@ async fn forward_to_fastest_doh(
         let query = requestBody.to_vec();
         let tx = tx.clone(); // 克隆发送者，确保每个任务都有一个发送通道
         let urlClone = url.clone(); // 克隆 URL，确保每个任务都有一个 URL 副本
-
+        let resolve_domain = config.resolve_skip_domains.clone();
         tokio::spawn(async move {
             let start_time = Instant::now();
+            let mut queryDns: Message = Message::from_bytes(&query).unwrap();
+
+            let domain_names: Vec<String> = queryDns
+                .queries()
+                .iter()
+                .map(|q| q.name().to_string())
+                .collect();
+            let domain_name = domain_names.get(0).unwrap_or(&String::from("")).clone();
+            if resolve_domain.contains(&domain_name) == false {
+                queryDns.queries_mut().iter_mut().for_each(|q| {
+                    q.set_query_type(RecordType::A);
+                });
+            } else {
+                println!("Skip resolve domain: {:?}", domain_name);
+            }
             let response = timeout(
                 Duration::from_secs(5),
                 client
                     .post(url)
                     .header("Content-Type", "application/dns-message")
-                    .body(query)
+                    .body(queryDns.to_vec().unwrap())
                     .timeout(Duration::from_millis(config.timeout))
                     .send(),
             )

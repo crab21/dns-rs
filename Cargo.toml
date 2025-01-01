@@ -3,7 +3,7 @@ name = "dns-rs"
 version = "0.1.0"
 edition = "2021"
 [dependencies]
-reqwest = { version = "0.11", features = ["json", "rustls-tls", "http3"] }
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 hickory-client = "0.24.2"
 tokio = { version = "1", features = ["full"] }
 
