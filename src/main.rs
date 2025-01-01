@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 async fn create_dashmap(
 ) -> Result<Arc<DashMap<String, Arc<DOHResponse>>>, Box<dyn std::error::Error + Send + Sync>> {
-    let dashmap: Arc<DashMap<String, Arc<DOHResponse>>> = Arc::new(DashMap::new());
+    let dashmap: Arc<DashMap<String, Arc<DOHResponse>>> = Arc::new(DashMap::with_capacity_and_shard_amount(65535,8192));
     Ok(dashmap)
 }
 
