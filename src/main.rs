@@ -7,6 +7,7 @@ use hickory_client::rr::domain;
 use hickory_client::rr::rdata::NULL;
 use hickory_client::rr::{Name, RecordType};
 use hickory_client::serialize::binary::{BinDecodable, BinEncodable};
+use reqwest::tls::Version;
 use reqwest::{Client, ClientBuilder};
 use serde::Deserialize;
 use std::alloc::System;
@@ -64,6 +65,8 @@ async fn create_client() -> Result<Arc<Client>, Box<dyn std::error::Error + Send
         .pool_idle_timeout(None) // 设置连接池空闲超时时间
         .use_rustls_tls()
         .tcp_nodelay(true)
+        .min_tls_version(Version::TLS_1_3) // 设置最小 TLS 版本
+        .max_tls_version(Version::TLS_1_3) // 设置最大 TLS 版本
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
@@ -77,6 +80,7 @@ async fn create_client() -> Result<Arc<Client>, Box<dyn std::error::Error + Send
 
             headers
         })
+        .http3_prior_knowledge()
         .build()?;
     Ok(Arc::new(client))
 }
