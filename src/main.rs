@@ -191,7 +191,6 @@ async fn find_and_update(
         let ttl = global_dash_map_clone
             .get(&domain_clone)
             .map(|v| {
-                println!("start to check ttl{:?}", domain_clone);
                 let now = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .expect("Time went backwards")
@@ -202,6 +201,10 @@ async fn find_and_update(
                 if (now - v.last_update) < 60 {
                     return 0;
                 }
+                println!(
+                    "check domain {:?} need to update, ttl:{:?}, last_update:{:?}",
+                    domain_clone, v.exipre_time,v.last_update
+                );
                 v.ttl
             })
             .unwrap_or_else(|| 0);
