@@ -65,7 +65,7 @@ async fn create_client() -> Result<Arc<Client>, Box<dyn std::error::Error + Send
         .pool_idle_timeout(None) // 设置连接池空闲超时时间
         .use_rustls_tls()
         .tcp_nodelay(true)
-        .min_tls_version(Version::TLS_1_3) // 设置最小 TLS 版本
+        .min_tls_version(Version::TLS_1_2) // 设置最小 TLS 版本
         .max_tls_version(Version::TLS_1_3) // 设置最大 TLS 版本
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();
