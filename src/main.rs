@@ -23,6 +23,9 @@ use std::{fs, string};
 use chrono::{NaiveDateTime, TimeZone, Utc};
 use once_cell::sync::Lazy;
 
+use std::ptr;
+
+
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
     dohs: Vec<String>,
@@ -49,27 +52,33 @@ async fn create_dashmap(
     Ok(dashmap)
 }
 
-async fn create_client() -> Result<Client, Box<dyn std::error::Error + Send + Sync>> {
+async fn create_client() -> Result<Arc<Client>, Box<dyn std::error::Error + Send + Sync>> {
     let client = ClientBuilder::new()
-        .tcp_keepalive(Some(Duration::from_secs(600))) // 设置 TCP 保活时间
-        .http2_keep_alive_interval(Some((Duration::from_secs(600)))) // 设置 HTTP/2 保活时间
+        .tcp_keepalive(Some(Duration::from_secs(60))) // 设置 TCP 保活时间
+        .http2_keep_alive_interval(Some((Duration::from_secs(10)))) // 设置 HTTP/2 保活时间
         .http2_keep_alive_while_idle(true)
         .http2_prior_knowledge() // 启用 HTTP/2 优化
         .https_only(true)
-        // .http3_prior_knowledge()
+        .http2_adaptive_window(true)
         .pool_max_idle_per_host(900) // 设置每个主机的最大空闲连接数
         .pool_idle_timeout(None) // 设置连接池空闲超时时间
+        .use_rustls_tls()
+        .tcp_nodelay(true)
         .default_headers({
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(
                 reqwest::header::CONNECTION,
                 reqwest::header::HeaderValue::from_static("keep-alive"),
             );
+            headers.insert(
+                reqwest::header::ACCEPT_ENCODING,
+                reqwest::header::HeaderValue::from_static("gzip, deflate, br"),
+            ); // 启用 Gzip, Deflate, Brotli 支持
+
             headers
         })
-        // .set_tls_enable_early_data(true) // 启用 TLS 1.3 0-RTT
         .build()?;
-    Ok(client)
+    Ok(Arc::new(client))
 }
 
 struct DOHRequest {
@@ -167,7 +176,7 @@ async fn find_and_update(
     domain: String,
     globalDashMap: Arc<DashMap<String, Arc<DOHResponse>>>,
     globalDashPreMap: Arc<DashMap<String, Arc<DOHResponse>>>,
-    client: &Client,
+    client: Arc<Client>,
     doh_urls: Vec<String>,
     requestBody: Vec<u8>,
     config: Config,
@@ -200,7 +209,7 @@ async fn find_and_update(
         }
 
         if let Ok(rr) =
-            forward_to_fastest_doh(&client_clone, domain_clone, requestBody, doh_urls, config).await
+            forward_to_fastest_doh(client_clone, domain_clone, requestBody, doh_urls, config).await
         {
             let rcopy = rr.clone();
             match parse_ip_ttl(rcopy.as_slice(), config_clone) {
@@ -323,7 +332,7 @@ async fn recv_and_do_resolve(
     globalDashMap: Arc<DashMap<String, Arc<DOHResponse>>>,
     globalDashPreMap: Arc<DashMap<String, Arc<DOHResponse>>>,
     socket: Arc<UdpSocket>,
-    client: Client,
+    client: Arc<Client>,
     config: Config,
     buf: [u8; 512],
     len: usize,
@@ -431,7 +440,7 @@ async fn recv_and_do_resolve(
     println!("Received DNS query from {}", src);
     // Forward to DoH servers and get the fastest response
     match forward_to_fastest_doh(
-        &client,
+        client,
         domainName.clone(),
         buf[..len].to_vec(),
         config.dohs.clone(),
@@ -471,18 +480,17 @@ async fn recv_and_do_resolve(
 }
 /// Forward DNS query to the fastest DoH server from a list of servers
 async fn forward_to_fastest_doh(
-    client: &Client,
+    client: Arc<Client>,
     domain: String,
     requestBody: Vec<u8>,
     doh_urls: Vec<String>,
     config: Config,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
-    let client = Client::new();
-    let (tx, mut rx) = mpsc::channel::<Option<(Duration, Vec<u8>, String)>>(1); // 通道的缓冲区为 1
-                                                                                // Spawn asynchronous tasks for each DoH server
+    let (tx, mut rx) = mpsc::channel::<Option<(Duration, Vec<u8>, String)>>(1); // 通道的缓冲区为
+
     for url in doh_urls {
+        let client_clone = client.clone();
         let domainName = domain.clone();
-        let client = client.clone();
         let query = requestBody.to_vec();
         let tx = tx.clone(); // 克隆发送者，确保每个任务都有一个发送通道
         let urlClone = url.clone(); // 克隆 URL，确保每个任务都有一个 URL 副本
@@ -506,7 +514,7 @@ async fn forward_to_fastest_doh(
             }
             let response = timeout(
                 Duration::from_secs(5),
-                client
+                client_clone
                     .post(url)
                     .header("Content-Type", "application/dns-message")
                     .body(queryDns.to_vec().unwrap())
