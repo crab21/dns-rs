@@ -26,7 +26,6 @@ use once_cell::sync::Lazy;
 
 use std::ptr;
 
-
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
     dohs: Vec<String>,
@@ -179,19 +178,17 @@ fn parse_ip_ttl(
 async fn find_and_update(
     domain: String,
     globalDashMap: Arc<DashMap<String, Arc<DOHResponse>>>,
-    globalDashPreMap: Arc<DashMap<String, Arc<DOHResponse>>>,
     client: Arc<Client>,
     doh_urls: Vec<String>,
     requestBody: Vec<u8>,
     config: Config,
 ) {
     let global_dash_map_clone = Arc::clone(&globalDashMap);
-    let global_dash_map_clone_pre = Arc::clone(&globalDashPreMap);
     let client_clone = client.clone();
     let config_clone = config.clone();
     let domain_clone = domain.clone();
     tokio::spawn(async move {
-        let ttl = global_dash_map_clone_pre
+        let ttl = global_dash_map_clone
             .get(&domain_clone)
             .map(|v| {
                 println!("start to check ttl{:?}", domain_clone);
@@ -199,7 +196,7 @@ async fn find_and_update(
                     .duration_since(UNIX_EPOCH)
                     .expect("Time went backwards")
                     .as_secs();
-                if v.ttl > 0 && (now - v.last_update) <= v.ttl {
+                if v.ttl > 0 && now <= v.ttl + v.last_update + (config.ttl_duration / 2) {
                     return 0;
                 }
                 if (now - v.last_update) < 60 {
@@ -222,15 +219,14 @@ async fn find_and_update(
                         "*******Caching response for domain: {:?}*******",
                         domain.clone()
                     );
-                    global_dash_map_clone.insert(domain.clone(), resp.clone());
-                    global_dash_map_clone_pre.insert(domain, resp);
+                    global_dash_map_clone.insert(domain, resp);
                 }
                 Err(e) => {
                     eprintln!("Failed to parse TTL: {}", e);
                 }
             }
         };
-        println!("globalDashMap len is: {:?}", globalDashPreMap.len());
+        println!("globalDashMap len is: {:?}", globalDashMap.len());
     });
 }
 
@@ -245,7 +241,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 打印解析后的结果
     println!("Config: {:?}", config);
     let globalDashMap = create_dashmap(config.clone()).await?;
-    let globalDashPreMap = create_dashmap(config.clone()).await?;
 
     // Listen on UDP port 53
     let address = format!("{}{}", "0.0.0.0:", config.port);
@@ -262,7 +257,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let mut buf = [0u8; 512];
 
-    let global_dash_map_clone_pre = Arc::clone(&globalDashPreMap);
     let global_dash_map_clone = Arc::clone(&globalDashMap);
     tokio::spawn(async move {
         if config.enable_cache == false {
@@ -272,7 +266,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut interval = interval(Duration::from_secs(config.clear_cache_interval));
         loop {
             interval.tick().await;
-            global_dash_map_clone_pre.clear(); // 清空 map
             global_dash_map_clone.clear(); // 清空 map
             println!("Map cleared!");
         }
@@ -294,11 +287,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let socket_clone = Arc::clone(&socket);
         if config.enable_cache {
             let global_dash_map_clone = Arc::clone(&globalDashMap);
-            let global_dash_map_clone_pre = Arc::clone(&globalDashPreMap);
             let _ = tokio::spawn(async move {
                 if let Err(e) = recv_and_do_resolve(
                     global_dash_map_clone,
-                    global_dash_map_clone_pre,
                     socket_clone,
                     client_clone,
                     config_clone,
@@ -314,7 +305,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         } else {
             let _ = tokio::spawn(async move {
                 if let Err(e) = recv_and_do_resolve(
-                    Default::default(),
                     Default::default(),
                     socket_clone,
                     client_clone,
@@ -334,7 +324,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
 async fn recv_and_do_resolve(
     globalDashMap: Arc<DashMap<String, Arc<DOHResponse>>>,
-    globalDashPreMap: Arc<DashMap<String, Arc<DOHResponse>>>,
     socket: Arc<UdpSocket>,
     client: Arc<Client>,
     config: Config,
@@ -398,16 +387,15 @@ async fn recv_and_do_resolve(
 
                         match sendRespose {
                             Ok(_) => {
-                                // find_and_update(
-                                //     cloneDomain,
-                                //     globalDashMap,
-                                //     globalDashPreMap,
-                                //     &client,
-                                //     config.dohs.clone(),
-                                //     buf[..len].to_vec(),
-                                //     config.clone(),
-                                // )
-                                // .await;
+                                find_and_update(
+                                    cloneDomain,
+                                    globalDashMap,
+                                    client,
+                                    config.dohs.clone(),
+                                    buf[..len].to_vec(),
+                                    config.clone(),
+                                )
+                                .await;
                                 return Ok(());
                             }
                             Err(e) => {
@@ -416,12 +404,10 @@ async fn recv_and_do_resolve(
                         }
                     } else {
                         globalDashMap.remove(&cloneDomain);
-                        globalDashPreMap.remove(&cloneDomain);
                         eprintln!("dns len is zero,,,,Failed to parse DNS response, re-resolve dns domain {:?}", cloneDomain);
                     }
                 } else {
                     globalDashMap.remove(&cloneDomain);
-                    globalDashPreMap.remove(&cloneDomain);
                     eprintln!(
                         "Failed to parse DNS response,re-resolve dns domain {:?}",
                         cloneDomain
@@ -429,7 +415,6 @@ async fn recv_and_do_resolve(
                 }
             } else {
                 globalDashMap.remove(&cloneDomain);
-                globalDashPreMap.remove(&cloneDomain);
             }
         } else {
             eprintln!("Failed to parse DNS query to get domain name");
@@ -465,8 +450,7 @@ async fn recv_and_do_resolve(
             match parse_ip_ttl(rcopy.as_slice(), config) {
                 Ok(resp) => {
                     if cc.enable_cache {
-                        globalDashMap.insert(domainName.clone(), resp.clone());
-                        globalDashPreMap.insert(domainName, resp);
+                        globalDashMap.insert(domainName, resp);
                     }
                     Ok(())
                 }
