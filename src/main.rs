@@ -39,10 +39,13 @@ struct Config {
 use std::sync::Arc;
 
 async fn create_dashmap(
-  config: Config
+    config: Config,
 ) -> Result<Arc<DashMap<String, Arc<DOHResponse>>>, Box<dyn std::error::Error + Send + Sync>> {
     let dashmap: Arc<DashMap<String, Arc<DOHResponse>>> =
-        Arc::new(DashMap::with_capacity_and_shard_amount(config.map_init_capacity as usize, config.map_init_shard_amount as usize));
+        Arc::new(DashMap::with_capacity_and_shard_amount(
+            config.map_init_capacity as usize,
+            config.map_init_shard_amount as usize,
+        ));
     Ok(dashmap)
 }
 
@@ -233,7 +236,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // Listen on UDP port 53
     let address = format!("{}{}", "0.0.0.0:", config.port);
-    let socket = Arc::new(UdpSocket::bind(address.clone()).await?);
+    let sc = UdpSocket::bind(address.clone()).await?;
+    let std_sock = sc.into_std()?;
+    std_sock.set_nonblocking(true);
+    std_sock.set_write_timeout(Some(Duration::from_secs(15)));
+
+    let sock = UdpSocket::from_std(std_sock)?;
+
+    let socket = Arc::new(sock);
     println!("Listening on ...{:?}", address);
     let client = create_client().await?;
 
