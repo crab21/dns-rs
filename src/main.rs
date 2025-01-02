@@ -12,6 +12,7 @@ use reqwest::{Client, ClientBuilder};
 use serde::Deserialize;
 use std::alloc::System;
 use std::borrow::{Borrow, BorrowMut};
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::Read;
 use tokio::net::UdpSocket;
@@ -38,6 +39,7 @@ struct Config {
     enable_cache: bool,
     map_init_capacity: u64,
     map_init_shard_amount: u64,
+    ttl_range_multi: HashMap<u64, u64>,
 }
 use std::sync::Arc;
 
@@ -195,7 +197,16 @@ async fn find_and_update(
                     .duration_since(UNIX_EPOCH)
                     .expect("Time went backwards")
                     .as_secs();
-                if v.ttl > 0 && now <= v.ttl + v.last_update + (config.ttl_duration / 2) {
+                let mut multi_num = v.ttl;
+                config.ttl_range_multi.keys().collect::<Vec<&u64>>().sort();
+                for (k, vv) in config.ttl_range_multi.iter() {
+                    if *k > v.ttl {
+                        multi_num = multi_num * (*vv);
+                        break;
+                    }
+                    continue;
+                }
+                if v.ttl > 0 && now <= v.ttl + v.last_update + multi_num {
                     return 0;
                 }
                 if (now - v.last_update) < 60 {
@@ -203,7 +214,7 @@ async fn find_and_update(
                 }
                 println!(
                     "check domain {:?} need to update, ttl:{:?}, last_update:{:?}",
-                    domain_clone, v.exipre_time,v.last_update
+                    domain_clone, v.exipre_time, v.last_update
                 );
                 v.ttl
             })
