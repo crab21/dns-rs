@@ -80,7 +80,7 @@ async fn create_client() -> Result<Arc<Client>, Box<dyn std::error::Error + Send
 
             headers
         })
-        .http3_prior_knowledge()
+        // .http3_prior_knowledge()
         .build()?;
     Ok(Arc::new(client))
 }
