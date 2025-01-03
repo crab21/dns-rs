@@ -178,9 +178,9 @@ fn parse_ip_ttl(
     let mut rng = rand::thread_rng(); // 创建随机数生成器
     let random_number: i32 = rng.gen_range(15..=100); // 生成 1 到 100 的随机整数
     let mut expire_time = now + (ttl as u64) + config.ttl_duration + (random_number as u64);
-    if ips.len() > 0 && ips.get(0).unwrap_or(&String::from("")).contains(":") {
-        expire_time = expire_time - config.ttl_duration - (random_number as u64);
-    }
+    // if ips.len() > 0 && ips.get(0).unwrap_or(&String::from("")).contains(":") {
+    //     expire_time = expire_time - config.ttl_duration - (random_number as u64);
+    // }
 
     let responseResult = DOHResponse {
         resp: response.to_vec(),
@@ -525,17 +525,11 @@ async fn forward_to_fastest_doh(
                 .map(|q| q.name().to_string())
                 .collect();
             let domain_name = domain_names.get(0).unwrap_or(&String::from("")).clone();
-            if resolve_domain.contains(&domain_name) == false && qtype.contains(&RecordType::AAAA) {
-                queryDns.queries_mut().iter_mut().for_each(|q| {
-                    q.set_query_type(RecordType::A);
-                });
-            } else {
-                println!(
-                    "Skip resolve domain: {:?}, query_type: {:?}",
-                    domain_name,
-                    qtype.get(0).unwrap_or(&RecordType::A).to_string()
-                );
-            }
+            println!(
+                "Skip resolve domain: {:?}, query_type: {:?}",
+                domain_name,
+                qtype.get(0).unwrap_or(&RecordType::A).to_string()
+            );
             let response = timeout(
                 Duration::from_secs(5),
                 client_clone
