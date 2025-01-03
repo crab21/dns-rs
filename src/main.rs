@@ -209,7 +209,7 @@ async fn find_and_update(
     if config_clone.enable_cache == false {
         return;
     }
-    
+
     tokio::spawn(async move {
         let ttl = global_dash_map_clone
             .get(&domain_clone)
@@ -265,7 +265,7 @@ async fn find_and_update(
     });
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 1024)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 8)]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // 读取 YAML 文件
     let yaml_content = fs::read_to_string("config.yaml")?;
@@ -538,6 +538,13 @@ async fn forward_to_fastest_doh(
                 domain_name,
                 qtype.get(0).unwrap_or(&RecordType::A).to_string()
             );
+            if resolve_domain.contains(&domain_name) == false {
+                queryDns.queries_mut().iter_mut().for_each(|q| {
+                    q.set_query_type(RecordType::A);
+                });
+            } else {
+                println!("Skip resolve domain: {:?}", domain_name);
+            }
             let response = timeout(
                 Duration::from_secs(5),
                 client_clone
