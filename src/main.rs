@@ -417,15 +417,15 @@ async fn recv_and_do_resolve(
 
                         match sendRespose {
                             Ok(_) => {
-                                find_and_update(
-                                    cloneDomain,
-                                    globalDashMap,
-                                    client,
-                                    config.dohs.clone(),
-                                    buf[..len].to_vec(),
-                                    config.clone(),
-                                )
-                                .await;
+                                // find_and_update(
+                                //     cloneDomain,
+                                //     globalDashMap,
+                                //     client,
+                                //     config.dohs.clone(),
+                                //     buf[..len].to_vec(),
+                                //     config.clone(),
+                                // )
+                                // .await;
                                 return Ok(());
                             }
                             Err(e) => {
@@ -433,18 +433,14 @@ async fn recv_and_do_resolve(
                             }
                         }
                     } else {
-                        globalDashMap.remove(&cloneDomain);
                         eprintln!("dns len is zero,,,,Failed to parse DNS response, re-resolve dns domain {:?}", cloneDomain);
                     }
                 } else {
-                    globalDashMap.remove(&cloneDomain);
                     eprintln!(
                         "Failed to parse DNS response,re-resolve dns domain {:?}",
                         cloneDomain
                     );
                 }
-            } else {
-                globalDashMap.remove(&cloneDomain);
             }
         } else {
             eprintln!("Failed to parse DNS query to get domain name");
@@ -475,12 +471,16 @@ async fn recv_and_do_resolve(
             }
             // 缓存响应
             let cc = config.clone();
-            println!("Caching response for domain: {:?}", domainName.clone());
             let rcopy = response.clone();
             match parse_ip_ttl(rcopy.as_slice(), config) {
                 Ok(resp) => {
                     if cc.enable_cache {
                         globalDashMap.insert(domainName, resp);
+                        println!(
+                            "Caching response for domain: {:?}, IPs: {:?}",
+                            domainName.clone(),
+                            parse_ip_addresses(&resp.resp).unwrap_or_default()
+                        );
                     }
                     Ok(())
                 }
