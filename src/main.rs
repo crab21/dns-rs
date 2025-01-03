@@ -475,12 +475,12 @@ async fn recv_and_do_resolve(
             match parse_ip_ttl(rcopy.as_slice(), config) {
                 Ok(resp) => {
                     if cc.enable_cache {
-                        globalDashMap.insert(domainName, resp);
                         println!(
                             "Caching response for domain: {:?}, IPs: {:?}",
                             domainName.clone(),
                             parse_ip_addresses(&resp.resp).unwrap_or_default()
                         );
+                        globalDashMap.insert(domainName, resp);
                     }
                     Ok(())
                 }
