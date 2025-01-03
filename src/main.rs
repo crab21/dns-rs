@@ -125,14 +125,6 @@ fn parse_ip_addresses(
             {
                 hickory_client::rr::RData::A(ip) => Some(ip.to_string()),
                 hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::SRV(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::CNAME(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::CAA(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::HTTPS(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::SOA(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::PTR(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::CAA(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::CSYNC(ip) => Some(ip.to_string()),
                 _ => None,
             }
         })
@@ -159,14 +151,6 @@ fn parse_ip_ttl(
             {
                 hickory_client::rr::RData::A(ip) => Some(ip.to_string()),
                 hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::SRV(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::CNAME(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::CAA(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::HTTPS(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::SOA(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::PTR(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::CAA(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::CSYNC(ip) => Some(ip.to_string()),
                 _ => None,
             }
         })
@@ -538,15 +522,13 @@ async fn forward_to_fastest_doh(
                 domain_name,
                 qtype.get(0).unwrap_or(&RecordType::A).to_string()
             );
-            // if resolve_domain.contains(&domain_name) == false {
-            //     queryDns.queries_mut().iter_mut().for_each(|q| {
-            //         if q.query_type() == RecordType::AAAA {
-            //             q.set_query_type(RecordType::A);
-            //         }
-            //     });
-            // } else {
-            //     println!("Skip resolve domain: {:?}", domain_name);
-            // }
+            if resolve_domain.contains(&domain_name) == false {
+                queryDns.queries_mut().iter_mut().for_each(|q| {
+                        q.set_query_type(RecordType::A);
+                });
+            } else {
+                println!("Skip resolve domain: {:?}", domain_name);
+            }
             let response = timeout(
                 Duration::from_secs(5),
                 client_clone
