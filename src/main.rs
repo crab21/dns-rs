@@ -127,6 +127,11 @@ fn parse_ip_addresses(
                 hickory_client::rr::RData::SRV(ip) => Some(ip.to_string()),
                 hickory_client::rr::RData::CNAME(ip) => Some(ip.to_string()),
                 hickory_client::rr::RData::CAA(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::HTTPS(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::SOA(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::PTR(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::CAA(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::CSYNC(ip) => Some(ip.to_string()),
                 _ => None,
             }
         })
@@ -156,6 +161,11 @@ fn parse_ip_ttl(
                 hickory_client::rr::RData::SRV(ip) => Some(ip.to_string()),
                 hickory_client::rr::RData::CNAME(ip) => Some(ip.to_string()),
                 hickory_client::rr::RData::CAA(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::HTTPS(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::SOA(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::PTR(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::CAA(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::CSYNC(ip) => Some(ip.to_string()),
                 _ => None,
             }
         })
@@ -506,11 +516,8 @@ async fn forward_to_fastest_doh(
         tokio::spawn(async move {
             let start_time = Instant::now();
             let mut queryDns: Message = Message::from_bytes(&query).unwrap();
-            let qtype: Vec<RecordType> = queryDns
-                .queries()
-                .iter()
-                .map(|q| q.query_type())
-                .collect();
+            let qtype: Vec<RecordType> =
+                queryDns.queries().iter().map(|q| q.query_type()).collect();
 
             let domain_names: Vec<String> = queryDns
                 .queries()
@@ -518,12 +525,16 @@ async fn forward_to_fastest_doh(
                 .map(|q| q.name().to_string())
                 .collect();
             let domain_name = domain_names.get(0).unwrap_or(&String::from("")).clone();
-            if resolve_domain.contains(&domain_name) == false && qtype.contains(&RecordType::AAAA){
+            if resolve_domain.contains(&domain_name) == false && qtype.contains(&RecordType::AAAA) {
                 queryDns.queries_mut().iter_mut().for_each(|q| {
                     q.set_query_type(RecordType::A);
                 });
             } else {
-                println!("Skip resolve domain: {:?}, query_type: {:?}", domain_name, qtype.get(0).unwrap_or(&RecordType::A).to_string());
+                println!(
+                    "Skip resolve domain: {:?}, query_type: {:?}",
+                    domain_name,
+                    qtype.get(0).unwrap_or(&RecordType::A).to_string()
+                );
             }
             let response = timeout(
                 Duration::from_secs(5),
