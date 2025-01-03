@@ -538,15 +538,15 @@ async fn forward_to_fastest_doh(
                 domain_name,
                 qtype.get(0).unwrap_or(&RecordType::A).to_string()
             );
-            if resolve_domain.contains(&domain_name) == false {
-                queryDns.queries_mut().iter_mut().for_each(|q| {
-                    if q.query_type() == RecordType::AAAA {
-                        q.set_query_type(RecordType::A);
-                    }
-                });
-            } else {
-                println!("Skip resolve domain: {:?}", domain_name);
-            }
+            // if resolve_domain.contains(&domain_name) == false {
+            //     queryDns.queries_mut().iter_mut().for_each(|q| {
+            //         if q.query_type() == RecordType::AAAA {
+            //             q.set_query_type(RecordType::A);
+            //         }
+            //     });
+            // } else {
+            //     println!("Skip resolve domain: {:?}", domain_name);
+            // }
             let response = timeout(
                 Duration::from_secs(5),
                 client_clone
