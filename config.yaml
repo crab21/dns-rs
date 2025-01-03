@@ -12,6 +12,7 @@ resolve_skip_domains:
 enable_cache: true
 map_init_capacity: 65535
 map_init_shard_amount: 8192
+enable_sniffing: true
 ttl_range_multi:
   10: 10
   50: 8

@@ -37,6 +37,7 @@ struct Config {
     enable_clear_expired_cache: bool,
     resolve_skip_domains: Vec<String>,
     enable_cache: bool,
+    enable_sniffing: bool,
     map_init_capacity: u64,
     map_init_shard_amount: u64,
     ttl_range_multi: HashMap<u64, u64>,
@@ -205,6 +206,10 @@ async fn find_and_update(
     let client_clone = client.clone();
     let config_clone = config.clone();
     let domain_clone = domain.clone();
+    if config_clone.enable_cache == false {
+        return;
+    }
+    
     tokio::spawn(async move {
         let ttl = global_dash_map_clone
             .get(&domain_clone)
@@ -417,15 +422,18 @@ async fn recv_and_do_resolve(
 
                         match sendRespose {
                             Ok(_) => {
-                                // find_and_update(
-                                //     cloneDomain,
-                                //     globalDashMap,
-                                //     client,
-                                //     config.dohs.clone(),
-                                //     buf[..len].to_vec(),
-                                //     config.clone(),
-                                // )
-                                // .await;
+                                if config.enable_sniffing {
+                                    find_and_update(
+                                        cloneDomain,
+                                        globalDashMap,
+                                        client,
+                                        config.dohs.clone(),
+                                        buf[..len].to_vec(),
+                                        config.clone(),
+                                    )
+                                    .await;
+                                }
+
                                 return Ok(());
                             }
                             Err(e) => {
