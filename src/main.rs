@@ -540,7 +540,9 @@ async fn forward_to_fastest_doh(
             );
             if resolve_domain.contains(&domain_name) == false {
                 queryDns.queries_mut().iter_mut().for_each(|q| {
-                    q.set_query_type(RecordType::A);
+                    if q.query_type() == RecordType::AAAA {
+                        q.set_query_type(RecordType::A);
+                    }
                 });
             } else {
                 println!("Skip resolve domain: {:?}", domain_name);
