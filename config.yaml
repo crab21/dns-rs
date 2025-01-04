@@ -4,7 +4,7 @@ dohs:
 port: 153
 timeout: 60
 # default: 3 days
-enable_clear_expired_cache: true
+enable_clear_expired_cache: false
 clear_cache_interval: 259200
 ttl_duration: 36000
 resolve_skip_domains:
@@ -12,7 +12,7 @@ resolve_skip_domains:
 enable_cache: true
 map_init_capacity: 65535
 map_init_shard_amount: 8192
-enable_sniffing: true
+enable_sniffing: false
 ttl_range_multi:
   10: 10
   50: 8

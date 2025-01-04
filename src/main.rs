@@ -310,11 +310,12 @@ async fn recv_and_do_resolve(
                 let mut message = Message::from_bytes(&value)?;
                 message.set_id(dohRequest.id);
                 // 解析并打印 DNS 响应中的 IP 地址
+                let mc = message.clone();
                 println!(
-                    "Cache hit for domain: {:?} , ttl: {:?}",
-                    cloneDomain, ttlTmp
+                    "Cache hit for domain: {:?} , ttl: {:?}, message pr: {:p}, message.clone pr: {:p}",
+                    cloneDomain, ttlTmp, (&message as *const Message), (&mc as *const Message)
                 );
-                let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
+                let sendRespose = socket.send_to(&mc.clone().to_vec().unwrap(), src).await;
 
                 match sendRespose {
                     Ok(_) => {
@@ -478,8 +479,8 @@ async fn forward_to_fastest_doh(
     // 等待第一个完成的结果
     if let Some((elapsed, response, url)) = rx.recv().await.flatten() {
         println!(
-            "Received domain: {:?} response from {} in {:?}",
-            domain, url, elapsed
+            "Received domain: {:?} response len: {:?} in {:?}",
+            domain, response.len(), elapsed
         );
         // 解析并打印 DNS 响应中的 IP 地址
         if let Ok(ips) = parse_ip_addresses(&response) {
