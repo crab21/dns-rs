@@ -307,15 +307,13 @@ async fn recv_and_do_resolve(
             domainName = domain_names[0].clone(); // 正确更新 domainName
             if value.len() > 0 {
                 println!();
-                let mut message = Message::from_bytes(&value)?;
-                message.set_id(dohRequest.id);
+                let message = Vec::from(Message::from_bytes(&value)?.clone().set_id(dohRequest.id).to_vec().clone().unwrap());
                 // 解析并打印 DNS 响应中的 IP 地址
-                let mc = message.clone();
                 println!(
                     "Cache hit for domain: {:?} , ttl: {:?}, message pr: {:p}, message.clone pr: {:p}",
-                    cloneDomain, ttlTmp, (&message as *const Message), (&mc as *const Message)
+                    cloneDomain, ttlTmp, (&value as *const Vec<u8>), (&message as *const Vec<u8>)
                 );
-                let sendRespose = socket.send_to(&mc.clone().to_vec().unwrap(), src).await;
+                let sendRespose = socket.send_to(&message, src).await;
 
                 match sendRespose {
                     Ok(_) => {
