@@ -311,8 +311,8 @@ async fn recv_and_do_resolve(
                 message.set_id(dohRequest.id);
                 // 解析并打印 DNS 响应中的 IP 地址
                 println!(
-                    "Cache hit for domain: {:?} ,Response contains IPs: {:?}, ttl: {:?}",
-                    cloneDomain, ips, ttlTmp
+                    "Cache hit for domain: {:?} , ttl: {:?}",
+                    cloneDomain, ttlTmp
                 );
                 let sendRespose = socket.send_to(&message.to_vec().unwrap(), src).await;
 
