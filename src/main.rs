@@ -89,6 +89,7 @@ async fn create_client() -> Result<Arc<Client>, Box<dyn std::error::Error + Send
 struct DOHRequest {
     domain_names: Vec<String>,
     id: u16,
+    query_type: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -98,17 +99,23 @@ struct DOHResponse {
     pub ttl: u64,
     pub last_update: u64,
     pub first_update: u64,
+    pub query_type: Vec<String>,
 }
 
 fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Error + Send + Sync>> {
     let message = Message::from_bytes(query)?;
     let questions = message.queries();
-    let query_types: Vec<String> = questions.clone().iter().map(|q| q.query_type().to_string()).collect();
+    let query_types: Vec<String> = questions
+        .clone()
+        .iter()
+        .map(|q| q.query_type().to_string())
+        .collect();
     println!("Received query for types: {:?}", query_types);
     let domain_names = questions.iter().map(|q| q.name().to_string()).collect();
     Ok(DOHRequest {
         domain_names,
         id: message.id(),
+        query_type: query_types,
     })
 }
 
@@ -167,14 +174,19 @@ fn parse_ip_ttl(
     // if ips.len() > 0 && ips.get(0).unwrap_or(&String::from("")).contains(":") {
     //     expire_time = expire_time - config.ttl_duration - (random_number as u64);
     // }
-
+    let types: Vec<String> = message
+        .queries()
+        .clone()
+        .iter()
+        .map(|q| q.query_type().to_string())
+        .collect();
     let responseResult = DOHResponse {
         resp: response.to_vec(),
         exipre_time: expire_time,
         ttl: ttl as u64,
         last_update: now,
         first_update: now,
-        ..Default::default()
+        query_type: types,
     };
     Ok(Arc::new(responseResult))
 }
@@ -272,7 +284,11 @@ async fn recv_and_do_resolve(
         if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
             let domain_names = dohRequest.domain_names;
             println!("Received query for domains: {:?}", domain_names);
-            let cloneDomain = domain_names[0].clone();
+            let cloneDomain = format!(
+                "{}-{}",
+                dohRequest.query_type.get(0).unwrap(),
+                domain_names[0].clone().as_str()
+            );
             let v = globalDashMap.get(&cloneDomain);
             let mut ttlTmp: u64 = 0;
             let value = v
@@ -306,7 +322,11 @@ async fn recv_and_do_resolve(
                 }
             })
             .unwrap_or_else(|| vec![]);
-            domainName = domain_names[0].clone(); // 正确更新 domainName
+            domainName = format!(
+                "{}-{}",
+                dohRequest.query_type.get(0).unwrap(),
+                domain_names[0].clone().as_str()
+            );
             if value.len() > 0 {
                 println!();
                 let message = Vec::from(
@@ -339,8 +359,12 @@ async fn recv_and_do_resolve(
     } else {
         if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
             let domain_names = dohRequest.domain_names;
-
-            domainName = domain_names[0].clone(); // 正确更新 domainName
+            domainName = format!(
+                "{}-{}",
+                dohRequest.query_type.get(0).unwrap(),
+                domain_names[0].clone().as_str()
+            );
+            // 正确更新 domainName
         }
     }
 
