@@ -103,6 +103,8 @@ struct DOHResponse {
 fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Error + Send + Sync>> {
     let message = Message::from_bytes(query)?;
     let questions = message.queries();
+    let query_types: Vec<String> = questions.clone().iter().map(|q| q.query_type().to_string()).collect();
+    println!("Received query for types: {:?}", query_types);
     let domain_names = questions.iter().map(|q| q.name().to_string()).collect();
     Ok(DOHRequest {
         domain_names,
@@ -307,7 +309,14 @@ async fn recv_and_do_resolve(
             domainName = domain_names[0].clone(); // 正确更新 domainName
             if value.len() > 0 {
                 println!();
-                let message = Vec::from(Message::from_bytes(&value)?.clone().set_id(dohRequest.id).to_vec().clone().unwrap());
+                let message = Vec::from(
+                    Message::from_bytes(&value)?
+                        .clone()
+                        .set_id(dohRequest.id)
+                        .to_vec()
+                        .clone()
+                        .unwrap(),
+                );
                 // 解析并打印 DNS 响应中的 IP 地址
                 println!(
                     "Cache hit for domain: {:?} , ttl: {:?}, message pr: {:p}, message.clone pr: {:p}",
@@ -330,6 +339,7 @@ async fn recv_and_do_resolve(
     } else {
         if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
             let domain_names = dohRequest.domain_names;
+
             domainName = domain_names[0].clone(); // 正确更新 domainName
         }
     }
@@ -478,7 +488,9 @@ async fn forward_to_fastest_doh(
     if let Some((elapsed, response, url)) = rx.recv().await.flatten() {
         println!(
             "Received domain: {:?} response len: {:?} in {:?}",
-            domain, response.len(), elapsed
+            domain,
+            response.len(),
+            elapsed
         );
         // 解析并打印 DNS 响应中的 IP 地址
         if let Ok(ips) = parse_ip_addresses(&response) {
