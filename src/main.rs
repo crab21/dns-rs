@@ -56,32 +56,15 @@ async fn create_dashmap(
 }
 
 async fn create_client() -> Result<Arc<Client>, Box<dyn std::error::Error + Send + Sync>> {
-    let client = ClientBuilder::new()
-        .tcp_keepalive(Some(Duration::from_secs(60))) // 设置 TCP 保活时间
-        .http2_keep_alive_interval(Some((Duration::from_secs(10)))) // 设置 HTTP/2 保活时间
-        .http2_keep_alive_while_idle(true)
-        .http2_prior_knowledge() // 启用 HTTP/2 优化
-        .https_only(true)
-        .http2_adaptive_window(true)
-        .pool_max_idle_per_host(900) // 设置每个主机的最大空闲连接数
-        .pool_idle_timeout(None) // 设置连接池空闲超时时间
+    let client = Client::builder()
+        .http3_prior_knowledge() // 启用 HTTP/3
+        .pool_max_idle_per_host(999) // 增大每主机的最大空闲连接数
+        .pool_idle_timeout(Duration::from_secs(300)) // 设置空闲连接超时时间
+        .timeout(Duration::from_secs(5)) // 设置超时时间
         .use_rustls_tls()
         .tcp_nodelay(true)
         .min_tls_version(Version::TLS_1_2) // 设置最小 TLS 版本
         .max_tls_version(Version::TLS_1_3) // 设置最大 TLS 版本
-        .default_headers({
-            let mut headers = reqwest::header::HeaderMap::new();
-            headers.insert(
-                reqwest::header::CONNECTION,
-                reqwest::header::HeaderValue::from_static("keep-alive"),
-            );
-            headers.insert(
-                reqwest::header::ACCEPT_ENCODING,
-                reqwest::header::HeaderValue::from_static("gzip, deflate, br"),
-            ); // 启用 Gzip, Deflate, Brotli 支持
-
-            headers
-        })
         // .http3_prior_knowledge()
         .build()?;
     Ok(Arc::new(client))
@@ -226,15 +209,15 @@ async fn find_and_update(
                     continue;
                 }
 
-                let datetime_shanghai = Utc.timestamp_opt((v.ttl + v.last_update + multi_num) as i64, 0).unwrap().with_timezone(&chrono_tz::Asia::Shanghai);
+                let datetime_shanghai = Utc
+                    .timestamp_opt((v.ttl + v.last_update + multi_num) as i64, 0)
+                    .unwrap()
+                    .with_timezone(&chrono_tz::Asia::Shanghai);
                 // 格式化为字符串
                 let formatted = datetime_shanghai.format("%Y-%m-%d %H:%M:%S").to_string();
                 println!(
                     "domain: {:?}, ttl: {:?}, now: {:?}, expire_time: {:?}",
-                    domain_clone,
-                    v.ttl,
-                    now,
-                    formatted
+                    domain_clone, v.ttl, now, formatted
                 );
                 if v.ttl > 0 && now <= v.ttl + v.last_update + multi_num {
                     return 0;
@@ -547,6 +530,7 @@ async fn forward_to_fastest_doh(
                     .header("Content-Type", "application/dns-message")
                     .body(queryDns.to_vec().unwrap())
                     .timeout(Duration::from_millis(config.timeout))
+                    .version(reqwest::Version::HTTP_3)
                     .send(),
             )
             .await;
