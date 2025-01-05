@@ -63,7 +63,7 @@ async fn create_client() -> Result<Arc<Client>, Box<dyn std::error::Error + Send
         .http2_prior_knowledge() // 启用 HTTP/2 优化
         .https_only(true)
         .http2_adaptive_window(true)
-        .pool_max_idle_per_host(900) // 设置每个主机的最大空闲连接数
+        .pool_max_idle_per_host(64) // 设置每个主机的最大空闲连接数
         .pool_idle_timeout(None) // 设置连接池空闲超时时间
         .use_rustls_tls()
         .tcp_nodelay(true)
@@ -134,6 +134,15 @@ fn parse_ip_addresses(
             {
                 hickory_client::rr::RData::A(ip) => Some(ip.to_string()),
                 hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::CNAME(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::MX(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::TXT(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::PTR(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::NS(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::SOA(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::SRV(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::SVCB(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::NAPTR(ip) => Some(ip.to_string()),
                 _ => None,
             }
         })
@@ -159,7 +168,16 @@ fn parse_ip_ttl(
                 .unwrap_or(&hickory_client::rr::RData::NULL(Default::default()))
             {
                 hickory_client::rr::RData::A(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()), 
+                hickory_client::rr::RData::CNAME(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::MX(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::TXT(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::PTR(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::NS(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::SOA(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::SRV(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::SVCB(ip) => Some(ip.to_string()),
+                hickory_client::rr::RData::NAPTR(ip) => Some(ip.to_string()),
                 _ => None,
             }
         })
@@ -299,7 +317,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Listening on ...{:?}", address);
     let client = create_client().await?;
 
-    let mut buf = [0u8; 512];
+    let mut buf = [0u8; 51200];
 
     loop {
         // Receive data
@@ -357,7 +375,7 @@ async fn recv_and_do_resolve(
     socket: Arc<UdpSocket>,
     client: Arc<Client>,
     config: Config,
-    buf: [u8; 512],
+    buf: [u8; 51200],
     len: usize,
     src: std::net::SocketAddr,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
