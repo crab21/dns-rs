@@ -239,10 +239,12 @@ async fn find_and_update(
                     .expect("Time went backwards")
                     .as_secs();
                 let mut multi_num = v.ttl;
-                config.ttl_range_multi.keys().collect::<Vec<&u64>>().sort();
-                for (k, vv) in config.ttl_range_multi.iter() {
+                let mut keys = config.ttl_range_multi.keys().collect::<Vec<&u64>>();
+                keys.sort();
+                info!("config.ttl_range_multi.keys: {:?}", keys);
+                for k in keys {
                     if *k > v.ttl {
-                        multi_num = multi_num * (*vv);
+                        multi_num = multi_num * config.ttl_range_multi.get(k).unwrap();
                         break;
                     }
                     continue;
