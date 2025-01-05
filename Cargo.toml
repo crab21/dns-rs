@@ -23,5 +23,8 @@ hyper-rustls = "0.27.5"
 chrono-tz = "0.10.0"
 rand = "0.8.5"
 
+
+log = "0.4.22"
+env_logger = "0.11.6"
 [env]
 RING_NO_ASM = "1"

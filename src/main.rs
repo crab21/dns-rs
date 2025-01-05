@@ -27,6 +27,9 @@ use once_cell::sync::Lazy;
 
 use std::ptr;
 
+use log::{debug, error, info, trace, warn};
+use log::{LevelFilter, SetLoggerError};
+
 #[derive(Debug, Deserialize, Clone)]
 struct Config {
     dohs: Vec<String>,
@@ -41,6 +44,7 @@ struct Config {
     map_init_capacity: u64,
     map_init_shard_amount: u64,
     ttl_range_multi: HashMap<u64, u64>,
+    log_level: u32,
 }
 use std::sync::Arc;
 
@@ -111,7 +115,7 @@ fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Err
         .iter()
         .map(|q| q.query_type().to_string())
         .collect();
-    println!("Received query for types: {:?}", query_types);
+    info!("Received query for types: {:?}", query_types);
     let domain_names = questions.iter().map(|q| q.name().to_string()).collect();
     Ok(DOHRequest {
         domain_names,
@@ -168,7 +172,7 @@ fn parse_ip_ttl(
                 .unwrap_or(&hickory_client::rr::RData::NULL(Default::default()))
             {
                 hickory_client::rr::RData::A(ip) => Some(ip.to_string()),
-                hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()), 
+                hickory_client::rr::RData::AAAA(ip) => Some(ip.to_string()),
                 hickory_client::rr::RData::CNAME(ip) => Some(ip.to_string()),
                 hickory_client::rr::RData::MX(ip) => Some(ip.to_string()),
                 hickory_client::rr::RData::TXT(ip) => Some(ip.to_string()),
@@ -244,15 +248,15 @@ async fn find_and_update(
                     continue;
                 }
 
-                let datetime_shanghai = Utc.timestamp_opt((v.ttl + v.last_update + multi_num) as i64, 0).unwrap().with_timezone(&chrono_tz::Asia::Shanghai);
+                let datetime_shanghai = Utc
+                    .timestamp_opt((v.ttl + v.last_update + multi_num) as i64, 0)
+                    .unwrap()
+                    .with_timezone(&chrono_tz::Asia::Shanghai);
                 // 格式化为字符串
                 let formatted = datetime_shanghai.format("%Y-%m-%d %H:%M:%S").to_string();
-                println!(
+                info!(
                     "domain: {:?}, ttl: {:?}, now: {:?}, expire_time: {:?}",
-                    domain_clone,
-                    v.ttl,
-                    now,
-                    formatted
+                    domain_clone, v.ttl, now, formatted
                 );
                 if v.ttl > 0 && now <= v.ttl + v.last_update + multi_num {
                     return 0;
@@ -260,7 +264,7 @@ async fn find_and_update(
                 if (now - v.last_update) < 60 {
                     return 0;
                 }
-                println!(
+                info!(
                     "check domain {:?} need to update, ttl:{:?}, last_update:{:?}",
                     domain_clone, v.exipre_time, v.last_update
                 );
@@ -277,18 +281,18 @@ async fn find_and_update(
             let rcopy = rr.clone();
             match parse_ip_ttl(rcopy.as_slice(), config_clone) {
                 Ok(resp) => {
-                    println!(
+                    info!(
                         "*******Caching response for domain: {:?}*******",
                         domain.clone()
                     );
                     global_dash_map_clone.insert(domain, resp);
                 }
                 Err(e) => {
-                    eprintln!("Failed to parse TTL: {}", e);
+                    error!("Failed to parse TTL: {}", e);
                 }
             }
         };
-        println!("globalDashMap len is: {:?}", globalDashMap.len());
+        info!("globalDashMap len is: {:?}", globalDashMap.len());
     });
 }
 
@@ -299,9 +303,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // 解析 YAML 内容为 Config 结构体
     let config: Config = serde_yaml::from_str(&yaml_content)?;
-
+    env_logger::builder()
+        .filter_level(match config.log_level {
+            0 => LevelFilter::Off,
+            1 => LevelFilter::Error,
+            2 => LevelFilter::Warn,
+            3 => LevelFilter::Info,
+            4 => LevelFilter::Debug,
+            5 => LevelFilter::Trace,
+            _ => LevelFilter::Info,
+        })
+        .init();
     // 打印解析后的结果
-    println!("Config: {:?}", config);
+    error!("Config: {:?}", config);
     let globalDashMap = create_dashmap(config.clone()).await?;
 
     // Listen on UDP port 53
@@ -314,7 +328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let sock = UdpSocket::from_std(std_sock)?;
 
     let socket = Arc::new(sock);
-    println!("Listening on ...{:?}", address);
+    info!("Listening on ...{:?}", address);
     let client = create_client().await?;
 
     let mut buf = [0u8; 51200];
@@ -384,7 +398,7 @@ async fn recv_and_do_resolve(
     if config.enable_cache {
         if let Ok(dohRequest) = parse_domain_name(&buf[..len]) {
             let domain_names = dohRequest.domain_names;
-            println!("Received query for domains: {:?}", domain_names);
+            info!("Received query for domains: {:?}", domain_names);
             let cloneDomain = format!(
                 "{}-{}",
                 dohRequest.query_type.get(0).unwrap(),
@@ -400,7 +414,7 @@ async fn recv_and_do_resolve(
                 // 格式化为字符串
                 let formatted = datetime_shanghai.format("%Y-%m-%d %H:%M:%S").to_string();
                 ttlTmp = v.ttl;
-                println!(
+                info!(
                     "v.expire_time: {:?}, format time: {:?}, ttl: {:?}",
                     v.exipre_time, formatted, ttlTmp
                 );
@@ -411,7 +425,7 @@ async fn recv_and_do_resolve(
                             .expect("Time went backwards")
                             .as_secs()
                     {
-                        println!(
+                        info!(
                             "Cache expired for domain: {:?}, v.expire_time: {:?}, format time: {:?}, ttl: {:?}",
                             cloneDomain, v.exipre_time, formatted, ttlTmp
                         );
@@ -429,7 +443,6 @@ async fn recv_and_do_resolve(
                 domain_names[0].clone().as_str()
             );
             if value.len() > 0 {
-                println!();
                 let message = Vec::from(
                     Message::from_bytes(&value)?
                         .clone()
@@ -439,7 +452,7 @@ async fn recv_and_do_resolve(
                         .unwrap(),
                 );
                 // 解析并打印 DNS 响应中的 IP 地址
-                println!(
+                info!(
                     "Cache hit for domain: {:?} , ttl: {:?}, message pr: {:p}, message.clone pr: {:p}",
                     cloneDomain, ttlTmp, (&value as *const Vec<u8>), (&message as *const Vec<u8>)
                 );
@@ -480,7 +493,7 @@ async fn recv_and_do_resolve(
         }
     }
 
-    println!("Received DNS query from {}", src);
+    info!("Received DNS query from {}", src);
     // Forward to DoH servers and get the fastest response
     match forward_to_fastest_doh(
         client,
@@ -503,7 +516,7 @@ async fn recv_and_do_resolve(
             match parse_ip_ttl(rcopy.as_slice(), config) {
                 Ok(resp) => {
                     if cc.enable_cache {
-                        println!(
+                        info!(
                             "Caching response for domain: {:?}, IPs: {:?}",
                             domainName.clone(),
                             parse_ip_addresses(&resp.resp).unwrap_or_default()
@@ -553,7 +566,7 @@ async fn forward_to_fastest_doh(
                 .map(|q| q.name().to_string())
                 .collect();
             let domain_name = domain_names.get(0).unwrap_or(&String::from("")).clone();
-            println!(
+            info!(
                 "Skip resolve domain: {:?}, query_type: {:?}",
                 domain_name,
                 qtype.get(0).unwrap_or(&RecordType::A).to_string()
@@ -579,11 +592,11 @@ async fn forward_to_fastest_doh(
                 }
 
                 Ok(Ok(resp)) if resp.status().is_success() == false => {
-                    println!(
+                    warn!(
                         "[NOT-SUCCESS] domain: {:?}, Failed to send request to {}",
                         domainName, urlClone
                     );
-                    eprintln!(
+                    error!(
                         "Failed to send request to {}",
                         resp.text().await.unwrap_or_default()
                     );
@@ -594,26 +607,26 @@ async fn forward_to_fastest_doh(
 
                 Ok(Err(e)) => {
                     // 处理 reqwest 错误
-                    eprintln!("domain: {:?},Failed to send request: {}", domainName, e);
+                    error!("domain: {:?},Failed to send request: {}", domainName, e);
                     tx.send(None)
                         .await
                         .unwrap_or_else(|err| (println!("{:?}", err)));
                 }
                 Err(e) => {
                     // 处理超时错误
-                    eprintln!("domain: {:?}, Request timed out: {}", domainName, e);
+                    error!("domain: {:?}, Request timed out: {}", domainName, e);
                     tx.send(None)
                         .await
                         .unwrap_or_else(|err| (println!("{:?}", err)));
                 }
                 _ => {
-                    println!(
+                    error!(
                         "domain: {:?},Failed to send request to {}",
                         domainName, urlClone
                     );
                     tx.send(None)
                         .await
-                        .unwrap_or_else(|err| (println!("{:?}", err)));
+                        .unwrap_or_else(|err| (error!("{:?}", err)));
                     // 发送到通道
                 }
             }
@@ -622,7 +635,7 @@ async fn forward_to_fastest_doh(
 
     // 等待第一个完成的结果
     if let Some((elapsed, response, url)) = rx.recv().await.flatten() {
-        println!(
+        trace!(
             "Received domain: {:?} response len: {:?} in {:?}",
             domain,
             response.len(),
@@ -630,7 +643,7 @@ async fn forward_to_fastest_doh(
         );
         // 解析并打印 DNS 响应中的 IP 地址
         if let Ok(ips) = parse_ip_addresses(&response) {
-            println!(
+            info!(
                 "Response domain: {:?} contains IPs: {:?}, from DOH: [{}]",
                 domain, ips, url
             );

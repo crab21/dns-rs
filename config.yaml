@@ -22,3 +22,4 @@ ttl_range_multi:
   1000: 4
   1500: 2
   10000: 1
+log_level: 3
