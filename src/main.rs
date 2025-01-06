@@ -163,7 +163,9 @@ fn parse_ip_ttl(
 ) -> Result<Arc<DOHResponse>, Box<dyn std::error::Error + Send + Sync>> {
     let message = Message::from_bytes(response)?;
     let answers = message.answers();
-    let ttl = answers.iter().map(|record| record.ttl()).min().unwrap_or(0);
+    let mut rng = rand::thread_rng(); // 创建随机数生成器
+    let random_number: i32 = rng.gen_range(15..=100); // 生成 1 到 100 的随机整数
+    let ttl = answers.iter().map(|record| record.ttl()).min().unwrap_or(0) + (random_number as u32);
     let ips: Vec<String> = answers
         .iter()
         .filter_map(|record| {
@@ -191,8 +193,7 @@ fn parse_ip_ttl(
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards")
         .as_secs();
-    let mut rng = rand::thread_rng(); // 创建随机数生成器
-    let random_number: i32 = rng.gen_range(15..=100); // 生成 1 到 100 的随机整数
+
     let expire_time = now + (ttl as u64) + config.ttl_duration + (random_number as u64);
     // if ips.len() > 0 && ips.get(0).unwrap_or(&String::from("")).contains(":") {
     //     expire_time = expire_time - config.ttl_duration - (random_number as u64);
