@@ -5,21 +5,21 @@ port: 153
 timeout: 60
 # default: 3 days
 enable_clear_expired_cache: false
-clear_cache_interval: 259200
-ttl_duration: 36000
+clear_cache_interval: 2592000000
+ttl_duration: 36000000
 resolve_skip_domains:
   - "epg.aptv.app."
 enable_cache: true
-map_init_capacity: 65535
-map_init_shard_amount: 8192
+map_init_capacity: 65536
+map_init_shard_amount: 65536
 enable_sniffing: true
 ttl_range_multi:
-  10: 10
-  50: 8
-  100: 7
-  250: 6
-  500: 5
-  1000: 4
-  1500: 2
+  10: 2890
+  50: 1890
+  100: 1000
+  250: 600
+  500: 500
+  1000: 400
+  1500: 20
   10000: 1
 log_level: 3
