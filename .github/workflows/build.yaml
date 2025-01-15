@@ -24,7 +24,7 @@ jobs:
           path: target/debug/dns-rs
           retention-days: 1
   libs-1:
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v4
       - name: Build
