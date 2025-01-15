@@ -23,3 +23,15 @@ jobs:
           name: dns-rs
           path: target/debug/dns-rs
           retention-days: 1
+  libs-1:
+    runs-on: ubuntu-18.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: RUSTFLAGS='--cfg reqwest_unstable' cargo build --verbose
+      - name: Upload error logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dns-rs-lib1
+          path: target/debug/dns-rs
+          retention-days: 1

@@ -115,7 +115,7 @@ fn parse_domain_name(query: &[u8]) -> Result<DOHRequest, Box<dyn std::error::Err
         .iter()
         .map(|q| q.query_type().to_string())
         .collect();
-    info!("Received query for types: {:?}", query_types);
+    trace!("Received query for types: {:?}", query_types);
     let domain_names = questions.iter().map(|q| q.name().to_string()).collect();
     Ok(DOHRequest {
         domain_names,
@@ -242,7 +242,7 @@ async fn find_and_update(
                 let mut multi_num = v.ttl;
                 let mut keys = config.ttl_range_multi.keys().collect::<Vec<&u64>>();
                 keys.sort();
-                info!("config.ttl_range_multi.keys: {:?}", keys);
+                trace!("config.ttl_range_multi.keys: {:?}", keys);
                 for k in keys {
                     if *k > v.ttl {
                         multi_num = multi_num * config.ttl_range_multi.get(k).unwrap();
@@ -417,7 +417,7 @@ async fn recv_and_do_resolve(
                 // 格式化为字符串
                 let formatted = datetime_shanghai.format("%Y-%m-%d %H:%M:%S").to_string();
                 ttlTmp = v.ttl;
-                info!(
+                trace!(
                     "v.expire_time: {:?}, format time: {:?}, ttl: {:?}",
                     v.exipre_time, formatted, ttlTmp
                 );
