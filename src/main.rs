@@ -215,88 +215,67 @@ fn parse_ip_ttl(
     Ok(Arc::new(responseResult))
 }
 
-async fn find_and_update(
+fn find_and_update(
     domain: String,
     globalDashMap: Arc<DashMap<String, Arc<DOHResponse>>>,
     client: Arc<Client>,
     doh_urls: Vec<String>,
     requestBody: Vec<u8>,
     config: Config,
-) {
+) -> bool {
     let global_dash_map_clone = Arc::clone(&globalDashMap);
     let client_clone = client.clone();
     let config_clone = config.clone();
     let domain_clone = domain.clone();
     if config_clone.enable_sniffing == false {
-        return;
+        return false;
     }
-
-    tokio::spawn(async move {
-        let ttl = global_dash_map_clone
-            .get(&domain_clone)
-            .map(|v| {
-                let now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .expect("Time went backwards")
-                    .as_secs();
-                let mut multi_num = v.ttl;
-                let mut keys = config.ttl_range_multi.keys().collect::<Vec<&u64>>();
-                keys.sort();
-                trace!("config.ttl_range_multi.keys: {:?}", keys);
-                for k in keys {
-                    if *k > v.ttl {
-                        multi_num = multi_num * config.ttl_range_multi.get(k).unwrap();
-                        break;
-                    }
-                    continue;
+    let ttl = global_dash_map_clone
+        .get(&domain_clone)
+        .map(|v| {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs();
+            let mut multi_num = v.ttl;
+            let mut keys = config.ttl_range_multi.keys().collect::<Vec<&u64>>();
+            keys.sort();
+            trace!("config.ttl_range_multi.keys: {:?}", keys);
+            for k in keys {
+                if *k > v.ttl {
+                    multi_num = multi_num * config.ttl_range_multi.get(k).unwrap();
+                    break;
                 }
-
-                let datetime_shanghai = Utc
-                    .timestamp_opt((v.ttl + v.last_update + multi_num) as i64, 0)
-                    .unwrap()
-                    .with_timezone(&chrono_tz::Asia::Shanghai);
-                // 格式化为字符串
-                let formatted = datetime_shanghai.format("%Y-%m-%d %H:%M:%S").to_string();
-                info!(
-                    "domain: {:?}, ttl: {:?}, now: {:?}, expire_time: {:?}",
-                    domain_clone, v.ttl, now, formatted
-                );
-                if v.ttl > 0 && now <= v.ttl + v.last_update + multi_num {
-                    return 0;
-                }
-                if (now - v.last_update) < 60 {
-                    return 0;
-                }
-                info!(
-                    "check domain {:?} need to update, ttl:{:?}, last_update:{:?}",
-                    domain_clone, v.exipre_time, v.last_update
-                );
-                v.ttl
-            })
-            .unwrap_or_else(|| 0);
-        if ttl == 0 {
-            return;
-        }
-
-        if let Ok(rr) =
-            forward_to_fastest_doh(client_clone, domain_clone, requestBody, doh_urls, config).await
-        {
-            let rcopy = rr.clone();
-            match parse_ip_ttl(rcopy.as_slice(), config_clone) {
-                Ok(resp) => {
-                    info!(
-                        "*******Caching response for domain: {:?}*******",
-                        domain.clone()
-                    );
-                    global_dash_map_clone.insert(domain, resp);
-                }
-                Err(e) => {
-                    error!("Failed to parse TTL: {}", e);
-                }
+                continue;
             }
-        };
-        info!("globalDashMap len is: {:?}", globalDashMap.len());
-    });
+
+            let datetime_shanghai = Utc
+                .timestamp_opt((v.ttl + v.last_update + multi_num) as i64, 0)
+                .unwrap()
+                .with_timezone(&chrono_tz::Asia::Shanghai);
+            // 格式化为字符串
+            let formatted = datetime_shanghai.format("%Y-%m-%d %H:%M:%S").to_string();
+            info!(
+                "domain: {:?}, ttl: {:?}, now: {:?}, expire_time: {:?}",
+                domain_clone, v.ttl, now, formatted
+            );
+            if v.ttl > 0 && now <= v.ttl + v.last_update + multi_num {
+                return 0;
+            }
+            if (now - v.last_update) < 60 {
+                return 0;
+            }
+            info!(
+                "check domain {:?} need to update, ttl:{:?}, last_update:{:?}",
+                domain_clone, v.exipre_time, v.last_update
+            );
+            v.ttl
+        })
+        .unwrap_or_else(|| 0);
+    if ttl == 0 {
+        return false;
+    }
+    return true;
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 8)]
@@ -409,7 +388,7 @@ async fn recv_and_do_resolve(
             );
             let v = globalDashMap.get(&cloneDomain);
             let mut ttlTmp: u64 = 0;
-            let value = v
+            let mut value = v
             .map(|v| {
                 // 转换为 UTC 时间
                 let datetime = Utc.timestamp_opt(v.exipre_time as i64, 0).unwrap();
@@ -445,6 +424,20 @@ async fn recv_and_do_resolve(
                 dohRequest.query_type.get(0).unwrap(),
                 domain_names[0].clone().as_str()
             );
+
+            let needUpdate = find_and_update(
+                domainName.clone(),
+                globalDashMap.clone(),
+                client.clone(),
+                config.dohs.clone(),
+                buf[..len].to_vec(),
+                config.clone(),
+            );
+
+            if needUpdate {
+                value = vec![]
+            }
+
             if value.len() > 0 {
                 let message = Vec::from(
                     Message::from_bytes(&value)?
@@ -463,17 +456,6 @@ async fn recv_and_do_resolve(
 
                 match sendRespose {
                     Ok(_) => {
-                        if config.enable_sniffing {
-                            find_and_update(
-                                domainName.clone(),
-                                globalDashMap,
-                                client,
-                                config.dohs.clone(),
-                                buf[..len].to_vec(),
-                                config.clone(),
-                            )
-                            .await;
-                        }
                         return Ok(());
                     }
                     Err(e) => {
