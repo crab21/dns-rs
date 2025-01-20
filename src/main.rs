@@ -216,22 +216,15 @@ fn parse_ip_ttl(
 }
 
 fn find_and_update(
-    domain: String,
+    domain: &String,
     globalDashMap: Arc<DashMap<String, Arc<DOHResponse>>>,
-    client: Arc<Client>,
-    doh_urls: Vec<String>,
-    requestBody: Vec<u8>,
     config: Config,
 ) -> bool {
-    let global_dash_map_clone = Arc::clone(&globalDashMap);
-    let client_clone = client.clone();
-    let config_clone = config.clone();
-    let domain_clone = domain.clone();
-    if config_clone.enable_sniffing == false {
+    if config.enable_sniffing == false {
         return false;
     }
-    let ttl = global_dash_map_clone
-        .get(&domain_clone)
+    let ttl = globalDashMap
+        .get(domain)
         .map(|v| {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -257,7 +250,7 @@ fn find_and_update(
             let formatted = datetime_shanghai.format("%Y-%m-%d %H:%M:%S").to_string();
             info!(
                 "domain: {:?}, ttl: {:?}, now: {:?}, expire_time: {:?}",
-                domain_clone, v.ttl, now, formatted
+                domain, v.ttl, now, formatted
             );
             if v.ttl > 0 && now <= v.ttl + v.last_update + multi_num {
                 return 0;
@@ -267,7 +260,7 @@ fn find_and_update(
             }
             info!(
                 "check domain {:?} need to update, ttl:{:?}, last_update:{:?}",
-                domain_clone, v.exipre_time, v.last_update
+                domain, v.exipre_time, v.last_update
             );
             v.ttl
         })
@@ -384,7 +377,7 @@ async fn recv_and_do_resolve(
             let cloneDomain = format!(
                 "{}-{}",
                 dohRequest.query_type.get(0).unwrap(),
-                domain_names[0].clone().as_str()
+                domain_names[0].as_str()
             );
             let v = globalDashMap.get(&cloneDomain);
             let mut ttlTmp: u64 = 0;
@@ -422,15 +415,12 @@ async fn recv_and_do_resolve(
             domainName = format!(
                 "{}-{}",
                 dohRequest.query_type.get(0).unwrap(),
-                domain_names[0].clone().as_str()
+                domain_names[0].as_str()
             );
 
             let needUpdate = find_and_update(
-                domainName.clone(),
+                domainName.borrow(),
                 globalDashMap.clone(),
-                client.clone(),
-                config.dohs.clone(),
-                buf[..len].to_vec(),
                 config.clone(),
             );
 
@@ -484,7 +474,6 @@ async fn recv_and_do_resolve(
         client,
         domainName.clone(),
         buf[..len].to_vec(),
-        config.dohs.clone(),
         config.clone(),
     )
     .await
@@ -495,15 +484,13 @@ async fn recv_and_do_resolve(
                 eprintln!("Failed to send response: {}", e);
                 return Err(e.into());
             }
-            // 缓存响应
-            let cc = config.clone();
-            let rcopy = response.clone();
-            match parse_ip_ttl(rcopy.as_slice(), config) {
+            let enable_cache = config.enable_cache;
+            match parse_ip_ttl(response.as_slice(), config) {
                 Ok(resp) => {
-                    if cc.enable_cache {
+                    if enable_cache {
                         info!(
                             "Caching response for domain: {:?}, IPs: {:?}",
-                            domainName.clone(),
+                            domainName,
                             parse_ip_addresses(&resp.resp).unwrap_or_default()
                         );
                         globalDashMap.insert(domainName, resp);
@@ -527,11 +514,10 @@ async fn forward_to_fastest_doh(
     client: Arc<Client>,
     domain: String,
     requestBody: Vec<u8>,
-    doh_urls: Vec<String>,
     config: Config,
 ) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let (tx, mut rx) = mpsc::channel::<Option<(Duration, Vec<u8>, String)>>(1); // 通道的缓冲区为
-
+    let doh_urls = config.dohs;
     for url in doh_urls {
         let client_clone = client.clone();
         let domainName = domain.clone();
